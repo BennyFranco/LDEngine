@@ -60,8 +60,8 @@ static struct player
  * Math functions get some min, max, vectors cross products, etc.
  ***************************************************************************************************/
 
-#define min(a, b) (((a) < (b)) ? (a) : (b));            // min: choose smaller of two scalars.
-#define max(a, b) (((a) > (b)) ? (a) : (b));            // max: choose greater of two scalars.
+#define min(a, b) (((a) < (b)) ? (a) : (b))            // min: choose smaller of two scalars.
+#define max(a, b) (((a) > (b)) ? (a) : (b))            // max: choose greater of two scalars.
 #define clamp(a, mi, ma) min(max(a, mi), ma)            // clamp: Clamp a value into set range.
 #define vxs(x0, y0, x1, y1) ((x0) * (y1) - (x1) * (y0)) // vxs: Vector cross product.
 
@@ -150,6 +150,72 @@ static void LoadData()
 
     fclose(fp);
     free(vert);
+}
+
+static void UnloadData()
+{
+    for(unsigned a = 0; a < NumSectors; ++a)
+    {
+        free(sectors[a].vertex);
+    }
+
+    for(unsigned a = 0; a < NumSectors; ++a)
+    {
+        free(sectors[a].neighbors);
+    }
+
+    sectors = NULL;
+
+    NumSectors = 0;
+}
+
+// viline: Draw a vertical line on screen, with a different color pixel in top and bottom
+static void vline(int x, int y1, int y2, int top, int middle, int bottom)
+{
+    int *pix = (int *) surface->pixels;
+    y1 = clamp(y1, 0, (H-1));
+    y2 = clamp(y2, 0, (H-1));
+
+    if(y2 == y1)
+    {
+        pix[y1*W+x] = middle;
+    }
+    else if(y2 > y1)
+    {
+        pix[y1*W+x] = middle;
+        for(int y = y1+1; y < y2; ++y)
+        {
+            pix[y*W+x] = middle;
+        }
+
+        pix[y2*W+x] = bottom;
+    }
+}
+
+// MovePlayer: Moves the player by (dx,dy) in the map, and also updates ther anglesin, anglecos and sector
+// properties.
+static void MovePlayer(float dx, float dy)
+{
+    float px = player.where.x, py = player.where.y;
+
+    const struct sector* const sect = &sectors[player.sector];
+    const struct vec2d* const vert = sect->vertex;
+
+    for(unsigned s = 0; s < sect->nPoints; ++s)
+    {
+        if(sect->neighbors[s] >= 0
+            && InsersectBox(px, py, px+dx, py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x, vert[s+1].y)
+            && PointSide(px+dx, py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x, vert[s+1].y) < 0)
+        {
+            player.sector = sect->neighbors[s];
+            break;
+        }
+    }
+
+    player.where.x += dx;
+    player.where.y += dy;
+    player.angleSin = sinf(player.angle);
+    player.angleCos = cosf(player.angle);
 }
 
 int main()
