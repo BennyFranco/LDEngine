@@ -182,7 +182,7 @@ static void vline(int x, int y1, int y2, int top, int middle, int bottom)
     }
     else if(y2 > y1)
     {
-        pix[y1*W+x] = middle;
+        pix[y1*W+x] = top;
         for(int y = y1+1; y < y2; ++y)
         {
             pix[y*W+x] = middle;
@@ -266,7 +266,7 @@ static void DrawScreen()
             tail = queue;
         }
 
-        if(renderedSectors[now.sectorno] & 0x21) continue; // 0dd = still rendering, 0x20 = give up
+        if(renderedSectors[now.sectorno] & 0x21) continue; // Odd = still rendering, 0x20 = give up
         ++renderedSectors[now.sectorno];
 
         const struct sector* const sect = &sectors[now.sectorno];
@@ -290,7 +290,7 @@ static void DrawScreen()
             float tz2 = vx2 * pcos + vy2 * psin;
 
             // Is the wall at least partially in fron of the player?
-            if(tz1 <= 0 || tz2 <= 0) continue;
+            if(tz1 <= 0 && tz2 <= 0) continue;
 
             // If it's partially behaind the player, clip it against player's view frustrum
             if(tz1 <= 0 || tz2 <= 0)
@@ -522,7 +522,7 @@ int main()
                 {
                     // Check where the hole is
                     float hole_low  = sect->neighbors[s] < 0 ? 9e9 : max(sect->floor, sectors[sect->neighbors[s]].floor);
-                    float hole_high = sect->neighbors[s] < 0 ? 9e9 : max(sect->ceil, sectors[sect->neighbors[s]].ceil);
+                    float hole_high = sect->neighbors[s] < 0 ? -9e9 : min(sect->ceil, sectors[sect->neighbors[s]].ceil);
 
                     // Check whether we're bumping into a wall
                     if(hole_high < player.where.z + HeadMargin || hole_low > player.where.z - eyeheight +KneeHeight)
@@ -600,14 +600,14 @@ int main()
 
             if(wasd[2])
             {
-                move_vec[0] += player.angleCos * 0.2f;
-                move_vec[1] -= player.angleSin * 0.2f;
+                move_vec[0] += player.angleSin * 0.2f;
+                move_vec[1] -= player.angleCos * 0.2f;
             }
 
             if(wasd[3])
             {
-                move_vec[0] -= player.angleCos * 0.2f;
-                move_vec[1] += player.angleSin * 0.2f;
+                move_vec[0] -= player.angleSin * 0.2f;
+                move_vec[1] += player.angleCos * 0.2f;
             }
 
             int pushing = wasd[0] || wasd[1] || wasd[2] || wasd[3];
