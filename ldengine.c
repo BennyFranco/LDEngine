@@ -1,7 +1,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <math.h>
-#include <SDL/SDL.h>
+#include <SDL2/SDL.h>
 
 #undef main
 
@@ -435,26 +435,30 @@ static void DrawScreen()
     } while(head != tail); // render any other queued sectors
 }
 
+static SDL_Window *window = NULL;
+
 int main()
 {
     LoadData();
 
-    if( SDL_Init( SDL_INIT_EVERYTHING ) == -1 )
-    {
+  if (SDL_Init(SDL_INIT_VIDEO) != 0) {
+        fprintf(stderr, "SDL failed to initialise: %s\n", SDL_GetError());
+        return 1;
+   }
+
+    window = SDL_CreateWindow("SDL Example", /* Title of the SDL window */
+ 			    SDL_WINDOWPOS_UNDEFINED, /* Position x of the window */
+ 			    SDL_WINDOWPOS_UNDEFINED, /* Position y of the window */
+ 			    W, /* Width of the window in pixels */
+ 			    H, /* Height of the window in pixels */
+ 			    SDL_WINDOW_OPENGL); /* Additional flag(s) */
+
+    if (window == NULL) {
+        fprintf(stderr, "SDL window failed to initialise: %s\n", SDL_GetError());
         return 1;
     }
 
-    surface = SDL_SetVideoMode(W, H, 32, SDL_HWSURFACE | SDL_RESIZABLE);
-
-      //If there was an error in setting up the screen
-    if( surface == NULL )
-    {
-        return 1;
-    }
-    SDL_WM_SetCaption( "Hello World", NULL );
-
-    SDL_EnableKeyRepeat(150, 30);
-    SDL_ShowCursor(SDL_DISABLE);
+    surface = SDL_GetWindowSurface(window);
 
     int wasd[4] = { 0, 0, 0, 0 };
     int ground = 0;
@@ -466,15 +470,6 @@ int main()
 
     for (;;)
     {
-        SDL_LockSurface(surface);
-        DrawScreen();
-        SDL_UnlockSurface(surface);
-
-        if( SDL_Flip( surface ) == -1 )
-        {
-            return 1;
-        }
-
         // Vertical collision detection
         float eyeheight = ducking ? DuckHeight : EyeHeight;
 
@@ -626,10 +621,17 @@ int main()
 
             SDL_Delay(10);
         }
+
+        SDL_LockSurface(surface);
+        DrawScreen();
+        SDL_UnlockSurface(surface);
+
+        SDL_UpdateWindowSurface(window);
     }
 
 done:
     UnloadData();
+    SDL_DestroyWindow(window);
     SDL_Quit();
     return 0;
 }
