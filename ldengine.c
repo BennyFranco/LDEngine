@@ -69,7 +69,7 @@ static struct player
 #define Overlap(a0, a1, b0, b1) (min(a0, a1) <= max(b0, b1) && min(b0, b1) <= max(a0, a1))
 
 // IntersectBox: Determine whether tow 2D-boxes intersect.
-#define InsersectBox(x0, y0, x1, y1, x2, y2, x3, y3) (Overlap(x0, x1, x2, x3) && Overlap(y0, y1, y2, y3))
+#define IntersectBox(x0, y0, x1, y1, x2, y2, x3, y3) (Overlap(x0, x1, x2, x3) && Overlap(y0, y1, y2, y3))
 
 // PointSide: Determine wich side of a line the point is on. Return value: <0, =0 or >0
 #define PointSide(px, py, x0, y0, x1, y1) vxs((x1) - (x0), (y1) - (y0), (px) - (x0), (py) - (y0))
@@ -204,7 +204,7 @@ static void MovePlayer(float dx, float dy)
     for(unsigned s = 0; s < sect->nPoints; ++s)
     {
         if(sect->neighbors[s] >= 0
-            && InsersectBox(px, py, px+dx, py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x, vert[s+1].y)
+            && IntersectBox(px, py, px+dx, py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x, vert[s+1].y)
             && PointSide(px+dx, py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x, vert[s+1].y) < 0)
         {
             player.sector = sect->neighbors[s];
@@ -418,7 +418,7 @@ static void DrawScreen()
                     unsigned r = 0x010101 * (255-z);
                     vline(x, cya, cyb, 0, x==x1 || x == x2 ? 0 : r, 0);
                 }
-            }
+            } // for ends
 
             // Shedule the neighboring sector for rendering within the window formed by this wall
             if(neighbor >= 0 && endx >= beginx && (head+MaxQueue+1-tail)%MaxQueue)
@@ -437,16 +437,115 @@ static void DrawScreen()
 
 int main()
 {
-    surface = SDL_SetVideoMode(W, H, 32, 0);
+    LoadData();
+
+    if( SDL_Init( SDL_INIT_EVERYTHING ) == -1 )
+    {
+        return 1;
+    }
+
+    surface = SDL_SetVideoMode(W, H, 32, SDL_HWSURFACE | SDL_RESIZABLE);
+
+      //If there was an error in setting up the screen
+    if( surface == NULL )
+    {
+        return 1;
+    }
+    SDL_WM_SetCaption( "Hello World", NULL );
 
     SDL_EnableKeyRepeat(150, 30);
     SDL_ShowCursor(SDL_DISABLE);
 
+    int wasd[4] = { 0, 0, 0, 0 };
+    int ground = 0;
+    int failling = 1;
+    int moving = 0;
+    int ducking = 0;
+
+    float yaw = 0;
+
     for (;;)
     {
         SDL_LockSurface(surface);
+        DrawScreen();
         SDL_UnlockSurface(surface);
-        SDL_Flip(surface);
+
+        if( SDL_Flip( surface ) == -1 )
+        {
+            return 1;
+        }
+
+        // Vertical collision detection
+        float eyeheight = ducking ? DuckHeight : EyeHeight;
+
+        ground = !failling;
+
+        if(failling)
+        {
+            player.velocity.z -= 0.05f; // Gravity
+            
+            float nextz = player.where.z + player.velocity.z;
+            
+            if(player.velocity.z < 0 && nextz < sectors[player.sector].floor + eyeheight) // When going down
+            {
+                // Fix to ground
+                player.where.z = sectors[player.sector].floor + eyeheight;
+                player.velocity.z = 0;
+                failling = 0;
+                ground = 1;
+            }
+            else if(player.velocity.z > 0 && nextz > sectors[player.sector].ceil) // Go up!
+            {
+                // Prevent jumping
+                player.velocity.z = 0;
+                failling = 1;
+            }
+
+            if(failling)
+            {
+                player.where.z += player.velocity.z;
+                moving = 1;
+            }
+        }
+
+        // Horizontal collision detection
+        if(moving)
+        {
+            float px = player.where.x;
+            float py = player.where.y;
+            float dx = player.velocity.x;
+            float dy = player.velocity.y;
+
+            const struct sector* const sect = &sectors[player.sector];
+            const struct vec2d* const vert = sect->vertex;
+
+            // Check if the player is about to cross one of the sector's edges
+            for(unsigned s = 0; s < sect->nPoints; ++s)
+            {
+                if(IntersectBox(px, py, px+dx, py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x,vert[s+1].y)
+                && PointSide(px+dx, py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x, vert[s+1].y) < 0)
+                {
+                    // Check where the hole is
+                    float hole_low  = sect->neighbors[s] < 0 ? 9e9 : max(sect->floor, sectors[sect->neighbors[s]].floor);
+                    float hole_high = sect->neighbors[s] < 0 ? 9e9 : max(sect->ceil, sectors[sect->neighbors[s]].ceil);
+
+                    // Check whether we're bumping into a wall
+                    if(hole_high < player.where.z + HeadMargin || hole_low > player.where.z - eyeheight +KneeHeight)
+                    {
+                        // Bumps into a wall! Slide along the wall
+                        float xd = vert[s+1].x - vert[s+0].x;
+                        float yd = vert[s+1].y - vert[s+0].y;
+
+                        dx = xd * (dx*xd + yd*dy) / (xd*xd + yd*yd);
+                        dy = yd * (dx*xd + yd*dy) / (xd*xd + yd*yd);
+                        moving = 0;
+                    }
+                }
+            }
+
+            MovePlayer(dx, dy);
+            failling = 1;
+        }
 
         // Keyboard events
         SDL_Event ev;
@@ -458,17 +557,79 @@ int main()
             case SDL_KEYUP:
                 switch (ev.key.keysym.sym)
                 {
-                case 'q':
-                    goto done;
+                    case 'w': wasd[0] = ev.type == SDL_KEYDOWN; break;
+                    case 's': wasd[1] = ev.type == SDL_KEYDOWN; break;
+                    case 'a': wasd[2] = ev.type == SDL_KEYDOWN; break;
+                    case 'd': wasd[3] = ev.type == SDL_KEYDOWN; break;
+                    case 'q':
+                        goto done;
+                    case ' ': // Jump
+                        if(ground)
+                        {
+                            player.velocity.z += 0.5;
+                            failling = 1;
+                        }
+                    break;
+                    case SDLK_LCTRL: // DUCK
+                    case SDLK_RCTRL:
+                        ducking = ev.type == SDL_KEYDOWN;
+                        failling = 1;
+                    break;
+                    default: break;
                 }
                 break;
             case SDL_QUIT:
                 goto done;
             }
+
+            // Mouse aiming
+            int x,y;
+            SDL_GetRelativeMouseState(&x, &y);
+            player.angle += x * 0.03f;
+            yaw = clamp(yaw - y * 0.05f, -5, 5);
+            player.yaw = yaw - player.velocity.z * 0.5f;
+            MovePlayer(0,0);
+
+            float move_vec[2] = { 0.f, 0.f };
+            if(wasd[0])
+            {
+                move_vec[0] += player.angleCos * 0.2f;
+                move_vec[1] += player.angleSin * 0.2f;
+            }
+
+            if(wasd[1])
+            {
+                move_vec[0] -= player.angleCos * 0.2f;
+                move_vec[1] -= player.angleSin * 0.2f;
+            }
+
+            if(wasd[2])
+            {
+                move_vec[0] += player.angleCos * 0.2f;
+                move_vec[1] -= player.angleSin * 0.2f;
+            }
+
+            if(wasd[3])
+            {
+                move_vec[0] -= player.angleCos * 0.2f;
+                move_vec[1] += player.angleSin * 0.2f;
+            }
+
+            int pushing = wasd[0] || wasd[1] || wasd[2] || wasd[3];
+            float acceleration = pushing ? 0.4 : 0.2;
+
+            player.velocity.x = player.velocity.x * (1-acceleration) + move_vec[0] * acceleration;
+            player.velocity.y = player.velocity.y * (1-acceleration) + move_vec[1] * acceleration;
+
+            if(pushing)
+                moving = 1;
+
+            SDL_Delay(10);
         }
     }
 
 done:
+    UnloadData();
     SDL_Quit();
     return 0;
 }
