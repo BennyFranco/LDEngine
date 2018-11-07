@@ -57,9 +57,19 @@
 #define MaxEdges    100     // Maximum number of edges in a sector
 #define MaxQueue    32      // Maximum number of pending portal renders
 
-
-
 static SDL_Surface *surface = NULL;
+
+#if TextureMapping
+typedef int Texture[1014][1024];
+
+struct TextureSet
+{
+    Texture texture;
+    Texture normalmap;
+    Texture lightmap;
+    Texture lightmap_diffuseonly;
+};
+#endif
 
 struct vec2d
 {
@@ -81,10 +91,33 @@ static struct sector
     float ceil;
     struct vec2d *vertex;
     signed char *neighbors;
-    unsigned int nPoints;
+    unsigned short nPoints;
+#if VisibilityTracking
+    int visible;
+#endif    
+#if TextureMapping
+    struct TextureSet *floortextrue;
+    struct TextureSet *ceiltexture;
+    struct TextureSet *uppertextures;
+    struct TextureSet *lowertextures;
+#endif
 } *sectors = NULL;
 
 static unsigned NumSectors = 0;
+
+#if VisibilityTracking
+#define MaxVisibleSectors   256
+
+struct vec2d VisibleFloorsBegins[MaxVisibleSectors][W];
+struct vec2d VisibleFloorEnds[MaxVisibleSectors][W];
+char VisibleFloors[MaxVisibleSectors][W];
+
+struct vec2d VisibleCeilBegins[MaxVisibleSectors][W];
+struct vec2d VisibleCeilEnds[MaxVisibleSectors][W];
+char VisibleCeils[MaxVisibleSectors][W];
+
+unsigned NumVisibleSectors = 0;
+#endif
 
 // Player: location of the player
 static struct player
@@ -95,16 +128,27 @@ static struct player
     float angleSin;
     float angleCos;
     float yaw;
-    unsigned sector; // Current vector
+    unsigned char sector; // Current vector
 } player;
+
+#if LightMapping
+static struct light
+{
+    struct vec3d where;
+    struct vec3d light;
+    unsigned char sector;
+} * lights = NULL;
+
+static unsigned NumLights = 0;
+#endif
 
 static void LoadData()
 {
-    FILE *fp = fopen("map-clear.txt", "rt");
+    FILE *fp = fopen("map.txt", "rt");
 
     if (!fp)
     {
-        perror("map-clear.txt");
+        perror("map.txt");
         exit(1);
     }
 
