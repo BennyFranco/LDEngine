@@ -156,63 +156,93 @@ static void LoadData()
     char word[256];
     char *ptr;
 
-    struct vec2d *vert = NULL, v;
+    struct vec2d vertex[MaxVertices];
+    struct vec2d *vertexptr = vertex;
 
-    int n, m, NumVertices = 0;
+    float x, y, angle, number, numbers[MaxEdges];
+
+    int n, m;
 
     while (fgets(buf, sizeof(buf), fp))
     {
         switch (sscanf(ptr = buf, "%32s%n", word, &n) == 1 ? word[0] : '\0')
         {
         case 'v':
-            for (sscanf(ptr += n, "%f%n", &v.y, &n); sscanf(ptr += n, "%f%n", &v.x, &n) == 1;)
+            for (sscanf(ptr += n, "%f%n", &y, &n); sscanf(ptr += n, "%f%n", &x, &n) == 1;)
             {
-                vert = realloc(vert, ++NumVertices * sizeof(*vert));
-                vert[NumVertices - 1] = v;
+
+                if(vertexptr >= vertex + MaxVertices)
+                {
+                    fprintf(stderr, "ERROR: Too many vertices, limit is %u\n", MaxVertices);
+                    exit(2);
+                }
+
+                *vertexptr++ = (struct vec2d) {x, y};
             }
             break;
         case 's':
             sectors = realloc(sectors, ++NumSectors * sizeof(*sectors));
             struct sector *sect = &sectors[NumSectors - 1];
-            int *num = NULL;
             sscanf(ptr += n, "%f%f%n", &sect->floor, &sect->ceil, &n);
             for (m = 0; sscanf(ptr += n, "%32s%n", word, &n) == 1 && word[0] != '#';)
             {
-                num = realloc(num, ++m * sizeof(*num));
-                num[m - 1] = word[0] == 'x' ? -1 : atoi(word);
+                if(m >= MaxEdges)
+                {
+                    fprintf(stderr, "ERROR: Too many edges in sector %u. Limit is %u\n", NumSectors-1, MaxEdges);
+                    exit(2);
+                }
+
+                numbers[m++] = word[0] == 'x' ? -1 : strtof(word, 0);
             }
 
             sect->nPoints = m /= 2;
             sect->neighbors = malloc((m) * sizeof(*sect->neighbors));
             sect->vertex = malloc((m + 1) * sizeof(*sect->vertex));
+#if VisibilityTracking
+            sect->visible = 0;
+#endif
 
             for (n = 0; n < m; ++n)
             {
-                sect->neighbors[n] = num[m + n];
+                sect->neighbors[n] = numbers[m + n];
             }
 
             for (n = 0; n < m; ++n)
             {
-                sect->vertex[n + 1] = vert[num[n]]; // TODO: Range checking
+                int v = numbers[n];
+                if(v >= vertexptr - vertex)
+                {
+                    fprintf(stderr, "ERROR: Invalid vertex number %d in sector %u; only have %u\n", v, NumSectors-1, (int)(vertexptr - vertex));
+                    exit(2);
+                }
+                sect->vertex[n + 1] = vertex[v]; // TODO: Range checking
             }
 
             sect->vertex[0] = sect->vertex[m];
-            free(num);
             break;
-        case 'p':;
-            float angle;
-            sscanf(ptr += n, "%f %f %f %d", &v.x, &v.y, &angle, &n);
+#if LightMapping
+        case 'l':
+            lights = realloc(lights, ++NumLights * sizeof(*lights));
+            struct light* light = &lights[NumLights-1];
+            sscanf(ptr += n, "%f %f %f %f %f %f %f", &light->where.x, &light->where.z, &light->where.y, &number,
+                                                     &light->light.x, &light->light.y, &light->light.z);
+            light->sector = (int)number;
+            break;
+#endif
+        case 'p':
+            sscanf(ptr += n, "%f %f %f %f", &x, &y, &angle, &number);
             player = (struct player)
             {
-                {v.x, v.y, 0}, {0, 0, 0}, angle, 0, 0, 0, n
+                {x, y, 0}, {0, 0, 0}, angle, 0, 0, 0, number
             };
 
             player.where.z = sectors[player.sector].floor + EyeHeight;
+            player.angleSin = sinf(player.angle);
+            player.angleCos = cosf(player.angle);
         }
     }
 
     fclose(fp);
-    free(vert);
 }
 
 static void UnloadData()
@@ -220,15 +250,11 @@ static void UnloadData()
     for(unsigned a = 0; a < NumSectors; ++a)
     {
         free(sectors[a].vertex);
-    }
-
-    for(unsigned a = 0; a < NumSectors; ++a)
-    {
         free(sectors[a].neighbors);
     }
 
+    free(sectors);
     sectors = NULL;
-
     NumSectors = 0;
 }
 
