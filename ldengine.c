@@ -19,13 +19,13 @@
 
 static SDL_Surface *surface = NULL;
 
-static struct vec2d
+struct vec2d
 {
     float x;
     float y;
 };
 
-static struct vec3d
+struct vec3d
 {
     float x;
     float y;
@@ -446,12 +446,12 @@ int main()
         return 1;
    }
 
-    window = SDL_CreateWindow("SDL Example", /* Title of the SDL window */
+    window = SDL_CreateWindow("SDL Doom", /* Title of the SDL window */
  			    SDL_WINDOWPOS_UNDEFINED, /* Position x of the window */
  			    SDL_WINDOWPOS_UNDEFINED, /* Position y of the window */
  			    W, /* Width of the window in pixels */
  			    H, /* Height of the window in pixels */
- 			    SDL_WINDOW_OPENGL); /* Additional flag(s) */
+ 			    SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN); /* Additional flag(s) */
 
     if (window == NULL) {
         fprintf(stderr, "SDL window failed to initialise: %s\n", SDL_GetError());
@@ -459,6 +459,8 @@ int main()
     }
 
     surface = SDL_GetWindowSurface(window);
+
+    SDL_ShowCursor(SDL_DISABLE);
 
     int wasd[4] = { 0, 0, 0, 0 };
     int ground = 0;
@@ -618,15 +620,14 @@ int main()
 
             if(pushing)
                 moving = 1;
-
-            SDL_Delay(10);
+				
         }
 
         SDL_LockSurface(surface);
         DrawScreen();
         SDL_UnlockSurface(surface);
-
         SDL_UpdateWindowSurface(window);
+		SDL_Delay(10);
     }
 
 done:
