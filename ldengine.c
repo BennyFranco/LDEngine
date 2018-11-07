@@ -1,21 +1,63 @@
+#include <assert.h>
 #include <stdio.h>
 #include <stdlib.h>
+#include <signal.h>
 #include <math.h>
 #include <SDL2/SDL.h>
 
-#undef main
-
 // Define windows size
-#define W 640
-#define H 480
+#define W  640 // width of "game" screen when mini map active
+#define W2 640 // Width of the screen
+#define H  480 // Height of the screen
 
 // Define vision constants
 #define EyeHeight   6           // Camera height from floor when standing
 #define DuckHeight  2.5         // And when crouching
 #define HeadMargin  1           // How much room there is above camera before the head hits the ceiling
 #define KneeHeight  2           // How tall obstacles the player can simply walk over without jumping
-#define hfov        (0.73f * H) // Affects the horizontal field of vision
-#define vfov        (0.2f * H)  // Affects the vertical field of vision
+// Never >= 180º
+#define hfov        (1.0 * 0.73f * H/W)     // Affects the horizontal field of vision
+#define vfov        (1.0 * 0.2f)            // Affects the vertical field of vision
+
+/********************************************* CONFIGS *********************************************/
+
+#define TextureMapping      1
+#define DepthShading        0
+#define LightMapping        1
+#define VisibilityTracking  1
+#define SplitScreen         0
+
+/********************************************* UTILITY *********************************************/
+/* Math functions get some min, max, vectors cross products, etc.                                  */ 
+/***************************************************************************************************/
+
+#define min(a, b) (((a) < (b)) ? (a) : (b))             // min: choose smaller of two scalars.
+#define max(a, b) (((a) > (b)) ? (a) : (b))             // max: choose greater of two scalars.
+#define abs(a) ((a) < 0 ? -(a) : (a))                   // abs: No sign value
+#define clamp(a, mi, ma) min(max(a, mi), ma)            // clamp: Clamp a value into set range.
+#define sign(v) (((v) > 0) - ((v) < 0))                 // sign: Return the sign of a value (-1, 0 or 1)
+#define vxs(x0, y0, x1, y1) ((x0) * (y1) - (x1) * (y0)) // vxs: Vector cross product.
+
+// Overlap: Determine whether the two number ranges overlap.
+#define Overlap(a0, a1, b0, b1) (min(a0, a1) <= max(b0, b1) && min(b0, b1) <= max(a0, a1))
+
+// IntersectBox: Determine whether tow 2D-boxes intersect.
+#define IntersectBox(x0, y0, x1, y1, x2, y2, x3, y3) (Overlap(x0, x1, x2, x3) && Overlap(y0, y1, y2, y3))
+
+// PointSide: Determine wich side of a line the point is on. Return value: <0, =0 or >0
+#define PointSide(px, py, x0, y0, x1, y1) sign(vxs((x1) - (x0), (y1) - (y0), (px) - (x0), (py) - (y0)))
+
+// Intersect: Calculate the point of intersection between two lines.
+#define Intersect(x1, y1, x2, y2, x3, y3, x4, y4) ((struct vec2d){                                                                        \
+    vxs(vxs(x1, y1, x2, y2), (x1) - (x2), vxs(x3, y3, x4, y4), (x3) - (x4)) / vxs((x1) - (x2), (y1) - (y2), (x3) - (x4), (y3) - (y4)), \
+    vxs(vxs(x1, y1, x2, y2), (y1) - (y2), vxs(x3, y3, x4, y4), (y3) - (y4)) / vxs((x1) - (x2), (y1) - (y2), (x3) - (x4), (y3) - (y4))})
+
+// Hard-coded limits
+#define MaxVertices 100     // Maximum number of vertices in a map
+#define MaxEdges    100     // Maximum number of edges in a sector
+#define MaxQueue    32      // Maximum number of pending portal renders
+
+
 
 static SDL_Surface *surface = NULL;
 
@@ -55,29 +97,6 @@ static struct player
     float yaw;
     unsigned sector; // Current vector
 } player;
-
-/********************************************* UTILITY *********************************************
- * Math functions get some min, max, vectors cross products, etc.
- ***************************************************************************************************/
-
-#define min(a, b) (((a) < (b)) ? (a) : (b))            // min: choose smaller of two scalars.
-#define max(a, b) (((a) > (b)) ? (a) : (b))            // max: choose greater of two scalars.
-#define clamp(a, mi, ma) min(max(a, mi), ma)            // clamp: Clamp a value into set range.
-#define vxs(x0, y0, x1, y1) ((x0) * (y1) - (x1) * (y0)) // vxs: Vector cross product.
-
-// Overlap: Determine whether the two number ranges overlap.
-#define Overlap(a0, a1, b0, b1) (min(a0, a1) <= max(b0, b1) && min(b0, b1) <= max(a0, a1))
-
-// IntersectBox: Determine whether tow 2D-boxes intersect.
-#define IntersectBox(x0, y0, x1, y1, x2, y2, x3, y3) (Overlap(x0, x1, x2, x3) && Overlap(y0, y1, y2, y3))
-
-// PointSide: Determine wich side of a line the point is on. Return value: <0, =0 or >0
-#define PointSide(px, py, x0, y0, x1, y1) vxs((x1) - (x0), (y1) - (y0), (px) - (x0), (py) - (y0))
-
-// Intersect: Calculate the point of intersection between two lines.
-#define Intersect(x1, y1, x2, y2, x3, y3, x4, y4) ((struct vec2d){                                                                        \
-    vxs(vxs(x1, y1, x2, y2), (x1) - (x2), vxs(x3, y3, x4, y4), (x3) - (x4)) / vxs((x1) - (x2), (y1) - (y2), (x3) - (x4), (y3) - (y4)), \
-    vxs(vxs(x1, y1, x2, y2), (y1) - (y2), vxs(x3, y3, x4, y4), (y3) - (y4)) / vxs((x1) - (x2), (y1) - (y2), (x3) - (x4), (y3) - (y4))})
 
 static void LoadData()
 {
@@ -220,11 +239,6 @@ static void MovePlayer(float dx, float dy)
 
 static void DrawScreen()
 {
-    enum
-    {
-        MaxQueue = 32 // Maximum number of pending portal renders
-    };
-
     struct item
     {
         int sectorno;
@@ -451,7 +465,7 @@ int main()
  			    SDL_WINDOWPOS_UNDEFINED, /* Position y of the window */
  			    W, /* Width of the window in pixels */
  			    H, /* Height of the window in pixels */
- 			    SDL_WINDOW_OPENGL | SDL_WINDOW_FULLSCREEN); /* Additional flag(s) */
+ 			    SDL_WINDOW_OPENGL); /* Additional flag(s) */
 
     if (window == NULL) {
         fprintf(stderr, "SDL window failed to initialise: %s\n", SDL_GetError());
@@ -464,7 +478,7 @@ int main()
 
     int wasd[4] = { 0, 0, 0, 0 };
     int ground = 0;
-    int failling = 1;
+    int falling = 1;
     int moving = 0;
     int ducking = 0;
 
@@ -475,9 +489,9 @@ int main()
         // Vertical collision detection
         float eyeheight = ducking ? DuckHeight : EyeHeight;
 
-        ground = !failling;
+        ground = !falling;
 
-        if(failling)
+        if(falling)
         {
             player.velocity.z -= 0.05f; // Gravity
             
@@ -488,17 +502,17 @@ int main()
                 // Fix to ground
                 player.where.z = sectors[player.sector].floor + eyeheight;
                 player.velocity.z = 0;
-                failling = 0;
+                falling = 0;
                 ground = 1;
             }
             else if(player.velocity.z > 0 && nextz > sectors[player.sector].ceil) // Go up!
             {
                 // Prevent jumping
                 player.velocity.z = 0;
-                failling = 1;
+                falling = 1;
             }
 
-            if(failling)
+            if(falling)
             {
                 player.where.z += player.velocity.z;
                 moving = 1;
@@ -541,7 +555,7 @@ int main()
             }
 
             MovePlayer(dx, dy);
-            failling = 1;
+            falling = 1;
         }
 
         // Keyboard events
@@ -564,13 +578,13 @@ int main()
                         if(ground)
                         {
                             player.velocity.z += 0.5;
-                            failling = 1;
+                            falling = 1;
                         }
                     break;
                     case SDLK_LCTRL: // DUCK
                     case SDLK_RCTRL:
                         ducking = ev.type == SDL_KEYDOWN;
-                        failling = 1;
+                        falling = 1;
                     break;
                     default: break;
                 }
