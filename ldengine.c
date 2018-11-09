@@ -96,7 +96,7 @@ static struct sector
     int visible;
 #endif    
 #if TextureMapping
-    struct TextureSet *floortextrue;
+    struct TextureSet *floortexture;
     struct TextureSet *ceiltexture;
     struct TextureSet *uppertextures;
     struct TextureSet *lowertextures;
@@ -142,7 +142,7 @@ static struct light
 static unsigned NumLights = 0;
 #endif
 
-static void LoadData()
+static void LoadData(void)
 {
     FILE *fp = fopen("map.txt", "rt");
 
@@ -245,7 +245,7 @@ static void LoadData()
     fclose(fp);
 }
 
-static void UnloadData()
+static void UnloadData(void)
 {
     for(unsigned a = 0; a < NumSectors; ++a)
     {
@@ -257,6 +257,173 @@ static void UnloadData()
     sectors = NULL;
     NumSectors = 0;
 }
+
+static int IntersetLineSegments(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3)
+{
+    return IntersectBox(x0,y0,x1,y1,x2,y2,x3,y3)
+        && abs(PointSide(x2,y2,x0,y0,x1,y1) + PointSide(x3,y3,x0,y0,x1,y1)) != 2
+        && abs(PointSide(x0,y0,x2,y2,x3,y3) + PointSide(x1,y1,x2,y2,x3,y3)) != 2;
+}
+
+struct Scaler
+{
+    int result;
+    int bop;
+    int fd;
+    int ca;
+    int cache;
+};
+
+#define Scaler_Init(a,b,c,d,f) \
+    { d + (b-1-a) * (f-d) / (c-a), ((f<d) ^ (c<a)) ? -1 : 1, \
+      abs(f-d), abs(c-a), (int)((b-1-a)* abs(f-d)) % abs(c-a) }
+
+static int Scaler_Next(struct Scaler* i)
+{
+    for(i->cache += i->fd; i->cache >= i->ca; i->cache -= i->ca)
+    {
+        i->result += i->bop;
+    }
+
+    return i->result;
+}
+#if TextureMapping
+#include <sys/mman.h>
+#include <unistd.h>
+#include <fcntl.h>
+#include <sys/stat.h>
+#include <errno.h>
+
+static int LoadTexture(void)
+{
+    int initialized = 0;
+    int fd = open("ldengine_textures.bin", O_RDWR | O_CREAT, 0664);
+
+    if(lseek(fd, 0, SEEK_END) == 0)
+    {
+InitializeTextures:;
+        // Initialize by loading textures
+        #define LoadTexture(filename, name) \
+            Texture* name = NULL; \
+                do { \
+                    FILE* fp = fopen(filename, "rb"); \
+                    if(!fp) perror(filename); else { \
+                        name = malloc (sizeof(*name));\
+                        fseek(fp, 0x11, SEEK_SET); \
+                        for(unsigned y=0; y<1024; ++y)\
+                            for(unsigned x=0; x<1024; ++x)\
+                            {\
+                                int r = fgetc(fp), g = fgetc(fp), b = fgetc(fp); \
+                                (*name)[x][y] = r * 65536 + g*256 + b; \
+                            }\
+                            fclose(fp); } \
+                    } while(0)    
+
+        #define UnloadTexture(name) free (name)   
+
+        Texture dummyLightmap;
+        memset(&dummyLightmap, 0, sizeof(dummyLightmap));
+
+        LoadTexture("wall2.ppm", WallTexture);
+        LoadTexture("wall2_norm.ppm", WallNormal);
+        LoadTexture("wall3.ppm", WallTexture2);
+        LoadTexture("wall3_norm.ppm", WallNormal2);
+        LoadTexture("floor2.ppm", FloorTexture);
+        LoadTexture("floor2_norm.ppm", FloorNormal);
+        LoadTexture("ceil2.ppm", CeilTexture);
+        LoadTexture("ceil2_norm.ppm", CeiltNormal);
+
+        #define SafeWrite(fd, buf, amount) do { \
+            const char* source = (const char*)(buf); \
+            long remain = (amount); \
+            while(remain > 0) { \
+                long result = write(fd, source, remain); \
+                if(result >= 0) { remain -= result; source += result; } \
+                else if(errno == EAGAIN || errno == EINTR) continue; \
+                else break; \
+            } \
+            if(remain > 0) perror("write"); \
+        } while(0)
+
+        #define PutTextureSet(txtname, normname) do { \
+            SafeWrite(fd, txtname, sizeof(Texture)); \
+            SafeWrite(fd, normname, sizeof(Texture)); \
+            SafeWrite(fd, &dummyLightmap, sizeof(Texture)); \
+            SafeWrite(fd, &dummyLightmap, sizeof(Texture)); } while(0)
+
+        printf("Initializing textures...");
+        lseek(fd, 0, SEEK_SET);
+
+        for(unsigned n = 0; n<NumSectors; ++n)
+        {
+            for(int s=printf("%d/%d", n+1, NumSectors); s--;)
+            {
+                putchar('\b');
+            }
+
+            fflush(stdout);
+
+            PutTextureSet(FloorTexture, FloorNormal);
+            PutTextureSet(CeilTexture, CeiltNormal);
+
+            for(unsigned w=0; w<sectors[n].nPoints; ++w)
+            {
+                PutTextureSet(WallTexture, WallNormal);
+            }
+
+            for(unsigned w=0; w<sectors[n].nPoints; ++w)
+            {
+                PutTextureSet(WallNormal2, WallNormal2);
+            }
+        }
+        
+        ftruncate(fd, lseek(fd, 0, SEEK_CUR));
+        printf("\n"); fflush(stdout);
+
+        UnloadTexture(WallTexture);
+        UnloadTexture(WallNormal);
+        UnloadTexture(WallTexture2);
+        UnloadTexture(WallNormal2);
+        UnloadTexture(FloorTexture);
+        UnloadTexture(FloorNormal);
+        UnloadTexture(CeilTexture);
+        UnloadTexture(CeiltNormal);
+
+        #undef UnloadTexture
+        #undef LoadTexture
+        initialized = 1;
+    }
+
+    off_t filesize = lseek(fd, 0 ,SEEK_END);
+    char* texturedata = mmap(NULL, filesize, PROT_READ | PROT_WRITE, MAP_SHARED, fd, 0);
+    if(!texturedata) perror("mmap");
+
+    printf("Loading textures\n");
+    off_t pos = 0;
+    for(unsigned n = 0; n<NumSectors; ++n)
+    {
+        sectors[n].floortexture = (void*)(texturedata + pos); pos += sizeof(struct TextureSet);
+        sectors[n].ceiltexture = (void*)(texturedata + pos); pos += sizeof(struct TextureSet);
+
+        unsigned w = sectors[n].nPoints;
+        sectors[n].uppertextures = (void*)(texturedata + pos); pos+=sizeof(struct TextureSet) * w;
+        sectors[n].lowertextures = (void*)(texturedata + pos); pos+=sizeof(struct TextureSet) * w;
+    }
+
+    printf("done, %llu bytes mmapped out of %llu\n", (unsigned long long)pos, (unsigned long long) filesize);
+
+    if(pos != filesize)
+    {
+        printf(" -- Wrong filesize! Let's try that again.\n");
+        munmap(texturedata, filesize);
+        goto InitializeTextures;
+    }
+
+    return initialized;
+}
+
+// HERE 
+#endif
 
 // viline: Draw a vertical line on screen, with a different color pixel in top and bottom
 static void vline(int x, int y1, int y2, int top, int middle, int bottom)
