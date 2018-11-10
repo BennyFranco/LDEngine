@@ -718,7 +718,204 @@ rescan:;
         return origin_sectorno == target_sectorno ? 0 : 2;
 }
 
+#define narealightcomponents    32
+#define area_light_radius       0.4
+#define nrandomvectors          128
+#define firstround              1
+#define maxrounds               100
+#define fade_distance_diffuse   10.0
+#define fade_distance_radiosity 10.0
+#define radiomul                1.0
 
+static struct vec3d tvec[nrandomvectors];
+static struct vec3d avec[narealightcomponents];
+
+static void DiffuseLightCalculation(struct vec3d normal, struct vec3d tangent, struct vec3d bitangent,
+                                    struct TextureSet* texture, unsigned tx, unsigned ty,
+                                    unsigned lx, unsigned ly,  struct vec3d point_in_wall,
+                                    unsigned sectorno)
+{
+    struct vec3d perturbed_normal = PerturbNormal(normal, tangent, bitangent, texture->normalmap[tx][ty]);
+
+    // For each lightsource, check if ther is an obstacle in between this vertex and the lightsource.
+    // Calculate the ambient light levels from the fact.
+    // This simulates diffuse light.
+    struct vec3d color = {0, 0, 0};
+    for(unsigned l=0; l<NumLights; ++l)
+    {
+        const struct light* light = &lights[l];
+        struct vec3d source = 
+        { 
+            point_in_wall.x + normal.x * 1e-5f,
+            point_in_wall.x + normal.x * 1e-5f,
+            point_in_wall.x + normal.x * 1e-5f
+        };
+
+        for(unsigned qa = 0; qa < narealightcomponents; ++qa)
+        {
+            struct vec3d target  = { light->where.x + avec[qa].x, light->where.y + avec[qa].y, light->where.z + avec[qa].z };
+            struct vec3d towards = { target.x - source.x, target.y - source.y, target.z - source.z };
+            float len = vlen(towards.x, towards.y, towards.z);
+            float invlen = 1.0f / len;
+            
+            towards.x *= invlen;
+            towards.y *= invlen;
+            towards.z *= invlen;
+
+            float cosine = vdot3(perturbed_normal.x, perturbed_normal.y, perturbed_normal.z, towards.x, towards.y, towards.z);
+            float power  = cosine / (1.f + powf(len / fade_distance_diffuse, 2.0f));
+            power /= (float) narealightcomponents;
+
+            if(power > 1e-7f)
+            {
+                struct Intersection i;
+                if(IntersectRay(source, sectorno, target, light->sector, &i) == 0)
+                {
+                    color.x += light->light.x * power;
+                    color.y += light->light.y * power;
+                    color.z += light->light.z * power;
+                }
+            }
+        }
+    }
+
+    PutColor(&texture->lightmap[lx][ly], color);
+}
+
+static void RadiosityCalculation(struct vec3d normal, struct vec3d tangent, struct vec3d bitangent,
+                                 struct TextureSet* texture, unsigned tx, unsigned ty,
+                                 unsigned lx, unsigned ly, struct vec3d point_in_wall,
+                                 unsigned sectorno)
+{
+    struct vec3d perturbed_normal = PerturbNormal(normal, tangent, bitangent, texture->normalmap[tx][ty]);
+
+    // Shoot rays to each random direction and see what it hits.
+    // Take the last round's light value from that location.
+    struct vec3d source = 
+    {
+        point_in_wall.x + normal.x * 1e-3f,
+        point_in_wall.y + normal.y * 1e-3f,
+        point_in_wall.z + normal.z * 1e-3f
+    };
+
+    float basepower = radiomul / nrandomvectors;
+
+    // Apply the set of random vectors to this surface.
+    // This produces a set of vectors all pointing away
+    // from the wall to random directions.
+    struct vec3d color = { 0, 0, 0 };
+    for(unsigned qq = 0; qq < nrandomvectors; ++qq)
+    {
+        struct vec3d rvec = tvec[qq];
+
+        // If the random vector points to the wrong side from the wall, flip it
+        if(vdot3(rvec.x, rvec.y, rvec.z, normal.x, normal.y, normal.z) < 0)
+        {
+            rvec.x = -rvec.x;
+            rvec.y = -rvec.y;
+            rvec.z = -rvec.z;
+        }
+
+        struct vec3d target =
+        {
+            source.x + rvec.x * 512.f,
+            source.y + rvec.y * 512.f,
+            source.z + rvec.z * 512.f
+        };
+
+        struct Intersection i;
+        if(IntersectRay(source, sectorno, target, -1, &i) == 1)
+        {
+            float cosine = vdot3(perturbed_normal.x, i.normal.x,
+                                 perturbed_normal.y, i.normal.y,
+                                 perturbed_normal.z, i.normal.z) * basepower;
+
+            float len = vlen(i.where.x - source.x, i.where.y - source.y, i.where.z - source.z);
+            float power = abs(cosine) / (1.f + powf(len / fade_distance_radiosity, 2.0f));
+
+            color.x += ((i.sample >> 16) & 0xFF) * power;
+            color.y += ((i.sample >>  8) & 0xFF) * power;
+            color.z += ((i.sample >>  0) & 0xFF) * power;
+        }
+    }
+
+    AddColor(&texture->lightmap[lx][ly], color);
+}
+
+static void Begin_Radiosity(struct TextureSet* set)
+{
+    memcpy(&set->lightmap, &set->lightmap_diffuseonly, sizeof(Texture));
+}
+
+static double End_Radiosity(struct TextureSet* set, const char* label)
+{
+    long differences = 0;
+    for(unsigned x=0; x < 1024; ++x)
+    {
+        for(unsigned y = 0; y < 1024; ++y)
+        {
+            int old = set->lightmap_diffuseonly[x][y];
+            int r = (old >> 16) & 0xFF;
+            int g = (old >>  8) & 0xFF;
+            int b = (old) & 0xFF;
+
+            int new = set->lightmap[x][y];
+            r -= (new >> 16) & 0xFF;
+            g -= (new >>  8) & 0xFF;
+            b -= (new) & 0xFF;
+
+            differences += abs(r) + abs(g) + abs(b);
+        }
+    }
+
+    double result = differences / (double)(1024 * 1024);
+    fprintf(stderr, "Differences in %s: %g\33[K\n", label, result);
+    return result;
+}
+
+static void End_Diffuse(struct TextureSet* set)
+{
+    memcpy(&set->lightmap_diffuseonly, &set->lightmap, sizeof(Texture));
+}
+
+#ifdef _OPENMP
+#include <omp.h>
+
+#define OMP_SCALER_LOOP_BEGIN(a,b,c,d,e,f) do { \
+        int this_thread = omp_get_thread_num(), num_threads = omp_get_num_threads(); \
+        int my_start = (this_thread  ) * ((c)-(a)) / num_threads + (a); \
+        int my_end   = (this_thread+1) * ((c)-(a)) / num_threads + (a); \
+        struct Scaler e##int = Scaler_Init(a, my_start, (c)-1, (d) * 32768, (f) * 32768); \
+        for(int b = my_start; b < my_end; ++b) \
+        { \
+            float e = Scaler_Next(&e##int) / 32768.f);\
+
+#else
+#define OMP_SCALER_LOOP_BEGIN(a,b,c,d,e,f) do { \
+        struct Scaler e##int = Scaler_Init(a, a ,(c)-1, (d)*32768, (f)*32768); \
+        for(int b = (a); b < (c); ++b) \
+        {\
+            float e = Scaler_Next(&e##int) / 32768.f; 
+#endif
+
+#define OMP_SCALER_LOOP_END() \
+        } \
+    } while(0)
+
+
+// Lightmap calculation involes some raytracing.
+static void BuildLightmaps(void)
+{
+    for(unsigned round = firstround; maxrounds; ++round)
+    {
+        fprintf(stderr, "Lighting calculation, round %u...\n", round);
+#ifndef _OPENMP
+    fprintf(stderr, "Note: This would probably go faster if you enabled OpenMP in your compiler options. It's -fopenmp in GCC and Clang. \n");
+#endif
+
+        
+    }
+}
 #endif
 #endif
 
