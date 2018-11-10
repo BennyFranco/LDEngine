@@ -529,7 +529,7 @@ static void AddColor(int* target, struct vec3d color)
     *target = ClampWithDesaturation(r,g,b);
 }
 
-static struct vec3d PerturbNormal(struct vec3d normal, struct vec3d tangent, struct vec3d bitanget, int normal_sample)
+static struct vec3d PerturbNormal(struct vec3d normal, struct vec3d tangent, struct vec3d bitangent, int normal_sample)
 {
     struct vec3d perturb = 
     { 
@@ -540,10 +540,182 @@ static struct vec3d PerturbNormal(struct vec3d normal, struct vec3d tangent, str
 
     return (struct vec3d) 
     {
-        normal.x * perturb.z + bitanget.x * perturb.y + tangent.x * perturb.x,
-        normal.y * perturb.z + bitanget.y * perturb.y + tangent.y * perturb.x,
-        normal.z * perturb.z + bitanget.z * perturb.y + tangent.z * perturb.x
+        normal.x * perturb.z + bitangent.x * perturb.y + tangent.x * perturb.x,
+        normal.y * perturb.z + bitangent.y * perturb.y + tangent.y * perturb.x,
+        normal.z * perturb.z + bitangent.z * perturb.y + tangent.z * perturb.x
     };  
+}
+
+static void GetSectorBoundingBox(int sectorno, struct vec2d* bounding_min, struct vec2d* bounding_max)
+{
+    const struct sector* sect = &sectors[sectorno];
+    for(int s = 0; s < sect->nPoints; ++s)
+    {
+        bounding_min->x = min(bounding_min->x, sect->vertex[s].x);
+        bounding_min->y = min(bounding_min->y, sect->vertex[s].y);
+        bounding_max->x = max(bounding_min->x, sect->vertex[s].x);
+        bounding_max->y = max(bounding_min->y, sect->vertex[s].y);
+
+    }
+}
+
+// Return values:
+//  0 = clear path, nothing hit
+//  1 = hit, *result indicates where it hit
+//  2 = a direct path doesn't lead to this sector
+static int IntersectRay(struct vec3d origin, int origin_sectorno, struct vec3d target, int target_sectorno, struct Intersection* result)
+{
+    unsigned n_rescan = 0;
+    int prev_sectorno = -1;
+
+rescan:;
+    ++n_rescan;
+
+    struct sector* sect = &sectors[origin_sectorno];
+
+    //Check if this beam hits one of the sector's edges.
+    unsigned u=0, v=0, lu=0, lv=0;
+    struct vec3d tangent, bitangent;
+
+    for(int s = 0; s < sect->nPoints; ++s)
+    {
+        float vx1 = sect->vertex[s+0].x;
+        float vy1 = sect->vertex[s+0].y;
+        float vx2 = sect->vertex[s+1].x;
+        float vy2 = sect->vertex[s+1].y;
+
+        if(!IntersetLineSegments(origin.x, origin.z, target.x, target.z, vx1, vy1, vx2, vy2))
+            continue;
+
+        // Determine the X and Z coordinates of the wall hit.
+        struct vec2d hit = Intersect(origin.x, origin.z, target.x, target.z, vx1, vy1, vx2, vy2);
+        float x = hit.x;
+        float z = hit.y;
+
+        // Also determine the Y coordinate
+        float y = origin.y + ((abs(target.x - origin.x) > abs(target.z-origin.z))
+                                ? ((x - origin.x) * (target.y - origin.y) / (target.x - origin.x))
+                                : ((z - origin.z) * (target.y - origin.y) / (target.z - origin.z)));
+
+        // Check where the hole is.
+        float hole_low = 9e9, hole_high = -9e9;
+
+        if(sect->neighbors[s] >= 0)
+        {
+            hole_low = max(sect->floor, sectors[sect->neighbors[s]].floor);
+            hole_high = min(sect->ceil, sectors[sect->neighbors[s]].ceil);        
+        }
+
+        if(y >= hole_low && y <= hole_high)
+        {
+            // the point fit in between  this hole.
+            origin_sectorno = sect->neighbors[s];
+            origin.x        = x + (target.x - origin.x)*1e-2;
+            origin.y        = y + (target.y - origin.y)*1e-2;
+            origin.z        = z + (target.z - origin.z)*1e-2;
+
+            float distance = vlen(target.x - origin.x, target.y - origin.y, target.z - origin.z);
+
+            if(origin_sectorno == prev_sectorno)
+            {
+                continue;
+            }
+            if(distance < 1e-3f || origin_sectorno == prev_sectorno)
+            {
+                goto close_enough;
+            }
+
+            prev_sectorno = origin_sectorno;
+            goto rescan;
+        }
+
+        // Hit the road jack
+        if(y < sect->floor)
+            goto hit_floor;
+        // D:! hit the ceil
+        if(y > sect->ceil)
+            goto hit_ceil;
+
+        // Oh now hit the wall!
+        result->where       = (struct vec3d) { x, y, z};
+        result->surface     = (y < hole_low) ? &sect->lowertextures[s] : &sect->uppertextures[s];
+        result->sectorno    = origin_sectorno;
+
+        float nx  = vy2-vy1;
+        float nz  = vx1-vx2;
+        float len = sqrtf(nx*nx + nz*nz);
+
+        result->normal = (struct vec3d){ nx/len, 0, nx/len };
+
+        nx  = vx2 - vx1;
+        nz  = vy2 - vy1;
+        len = sqrtf(nx * nx + nz * nz);
+        tangent = (struct vec3d){ nx/len, 0, nz/len };
+        bitangent = (struct vec3d){ 0, 1, 0};
+
+        // Calculate the texture coordinates.
+        float dx = vx2 - vx1;
+        float dy = vy2 - vy1;
+
+        v = (unsigned)((y - sect->floor) * 1024.0f / (sect->ceil - sect->floor)) % 1024u;
+        u = (abs(dx) > abs(dy) ? (unsigned)((x-vx1)*1024/dx)
+                               : (unsigned)((z-vy1)*1024/dy)) % 1024u;
+
+        // Lightmap coordinate are the same as texture coordinates.
+        lu = u;
+        lv = v;
+
+    perturb_normal:;
+        int texture_sample = result->surface->texture[v][u];
+        int normal_sample  = result->surface->normalmap[v][u];
+        int light_sample   = result->surface->lightmap[lv][lu];
+        result->sample = ApplyLight(texture_sample, light_sample);
+        result->normal = PerturbNormal(result->normal, tangent, bitangent, normal_sample);
+        return 1;
+    }
+
+    if(target.y > sect->ceil)
+    {
+        hit_ceil:
+            result->where.y = sect->ceil;
+            result->surface = sect->ceiltexture;
+            result->normal  = (struct vec3d){ 0, -1, 0 };
+            tangent         = (struct vec3d){ 1, 0, 0 };
+            bitangent       = vxs3(result->normal.x, result->normal.y, result->normal.z, tangent.x, tangent.y, tangent.z); 
+        hit_ceil_or_floor:
+            // Either the floor or ceiling was hit. Determine X & Z coordinates.
+            result->where.x = (result->where.y - origin.y) * (target.x - origin.x) / (target.y - origin.y) + origin.x;
+            result->where.z = (result->where.y - origin.y) * (target.z - origin.z) / (target.y - origin.y) + origin.z;
+
+            // Calculate the texture coordinates.
+            u = ((unsigned)(result->where.x * 256)) % 1024u;
+            v = ((unsigned)(result->where.z * 256)) % 1024u;
+
+            // Calculate the lightmap coordinates.
+            struct vec2d bounding_min = { 1e9f, 1e9f };
+            struct vec2d bounding_max = { -1e9f, -1e9f };
+            GetSectorBoundingBox(origin_sectorno, &bounding_min, &bounding_max);
+            lu = ((unsigned)((result->where.x - bounding_min.x) * 1024 / (bounding_max.x - bounding_min.x))) % 1024u;
+            lv = ((unsigned)((result->where.y - bounding_min.y) * 1024 / (bounding_max.y - bounding_min.y))) % 1024u;
+
+            goto perturb_normal;
+    }
+
+    if(target.y < sect->floor)
+    {
+        hit_floor:
+            result->where.y = sect->floor;
+            result->surface = sect->floortexture;
+            result->normal  = (struct vec3d){ 0, 1, 0};
+            tangent         = (struct vec3d){ -1, 0, 0};
+            bitangent       = vxs3(result->normal.x, result->normal.y, result->normal.z, tangent.x, tangent.y, tangent.z); 
+            
+            goto hit_ceil_or_floor;
+    }
+
+    close_enough:;
+        // Is the target in this sector?
+        return origin_sectorno == target_sectorno ? 0 : 2;
 }
 
 
