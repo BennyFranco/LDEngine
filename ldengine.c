@@ -422,7 +422,132 @@ InitializeTextures:;
     return initialized;
 }
 
-// HERE 
+#if LightMapping
+#define vlen(x,y,z) sqrtf((x)*(x) + (y) * (y) + (z) * (z))
+#define vlen2(x0,y0,z0,x1,y1,z1) vlen((x1-x0), (y1-y0), (z1-z0))
+#define vdot3(x0,y0,z0,x1,y1,z1) ((x0)*(x1) + (y0)*(y1) + (z0)*(z1))
+#define vxs3(x0,y0,z0,x1,y1,z1) (struct vec3d){ vxs(y0,z0,y1,z1), vxs(z0,x0,z1,x1), vxs(x0,y0,x1,y1) }
+
+struct Intersection
+{
+    struct vec3d where;                 // Map coordinates where the hit happened, x,z = map, y = height
+    struct TextureSet* surface;         // Information about the surface that was hit
+    struct vec3d normal;                // Perturbet surface normal
+    int sample;                         // RGB sample from surface texture and lightmap
+    int sectorno;                       
+};
+
+static int ClampWithDesaturation(int r, int g, int b)
+{
+    int luma = r * 299 + g * 587 + b * 114;
+    if(luma > 255000)
+    {
+        r = g = b = 255;
+    }
+    else if(luma <= 0)
+    {
+        r=g=b=0;
+    }
+    else
+    {
+        double sat = 1000;
+        if(r > 255)
+        {
+            sat = min(sat,(luma-255e3) / (luma-r));
+        }
+        else if(r < 0)
+        {
+            sat = min(sat, luma/(double)(luma-r));
+        }
+
+        if(g > 255)
+        {
+            sat = min(sat,(luma-255e3) / (luma-g));
+        }
+        else if(g < 0)
+        {
+            sat = min(sat, luma/(double)(luma-g));
+        }
+
+        if(b > 255)
+        {
+            sat = min(sat,(luma-255e3) / (luma-b));
+        }
+        else if(b < 0)
+        {
+            sat = min(sat, luma/(double)(luma-b));
+        }
+
+        if(sat != 1.0)
+        {
+            r = (r - luma) * sat/1e3 + luma; 
+            r = clamp(r, 0, 255);
+           
+            g = (g - luma) * sat/1e3 + luma; 
+            g = clamp(g, 0, 255);
+           
+            b = (b - luma) * sat/1e3 + luma; 
+            b = clamp(b, 0, 255);
+        }
+    }
+
+    return r * 65536 + g * 256 + b;
+}
+
+static int ApplyLight(int texture, int light)
+{
+    int tr = (texture >> 16) & 0xFF;
+    int tg = (texture >>  8) & 0xFF;
+    int tb = (texture >>  0) & 0xFF;
+    int lr = ((light >> 16)  & 0xFF);
+    int lg = ((light >>  8)  & 0xFF);
+    int lb = ((light >>  0)  & 0xFF);
+    int r = tr * lr * 2 / 255;
+    int g = tg * lg * 2 / 255;
+    int b = tb * lb * 2 / 255;
+
+#if 1
+    return ClampWithDesaturation(r,g,b);
+#else
+    return clamp(tr*lr / 255,0,255) * 65536
+         + clamp(tg*lg / 255, 0, 255) * 256
+         + clamp(tb*lb / 255, 0, 255);
+#endif
+}
+
+static void PutColor(int* target, struct vec3d color)
+{
+    *target = ClampWithDesaturation(color.x, color.y, color.z);
+}
+
+static void AddColor(int* target, struct vec3d color)
+{
+    int r = ((*target >> 16) &0xFF) + color.x;
+    int g = ((*target >> 16) &0xFF) + color.y;
+    int b = ((*target >> 16) &0xFF) + color.z;
+
+    *target = ClampWithDesaturation(r,g,b);
+}
+
+static struct vec3d PerturbNormal(struct vec3d normal, struct vec3d tangent, struct vec3d bitanget, int normal_sample)
+{
+    struct vec3d perturb = 
+    { 
+        ((normal_sample >> 16) & 0xFF) / 127.5f - 1.f,  
+        ((normal_sample >>  8) & 0xFF) / 127.5f - 1.f,  
+        ((normal_sample >>  0) & 0xFF) / 127.5f - 1.f   
+    };
+
+    return (struct vec3d) 
+    {
+        normal.x * perturb.z + bitanget.x * perturb.y + tangent.x * perturb.x,
+        normal.y * perturb.z + bitanget.y * perturb.y + tangent.y * perturb.x,
+        normal.z * perturb.z + bitanget.z * perturb.y + tangent.z * perturb.x
+    };  
+}
+
+
+#endif
 #endif
 
 // viline: Draw a vertical line on screen, with a different color pixel in top and bottom
