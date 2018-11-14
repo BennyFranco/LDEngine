@@ -1142,6 +1142,117 @@ static void BuildLightmaps(void)
 #endif
 #endif
 
+// Helper function for the antialiased line algorithm.
+#define fpart(x) ((x) < 0 ? 1 - ((x) - floorf(x)) : (x) - floorf(x))
+#define rfpart(x) (1 -fpart(x))
+static void plot(int x, int y, float opacity, int color)
+{
+    opacity = powf(opacity, 1/2.2f);
+    int *pix = ((int*) surface->pixels) + y * W2 + x;
+    int r0 = (*pix >> 16) & 0xFF, r1 = (color >> 16) & 0xFF;
+    int g0 = (*pix >>  8) & 0xFF, g1 = (color >>  8) & 0xFF;
+    int b0 = (*pix >>  0) & 0xFF, b1 = (color >>  0) & 0xFF;
+    int r = max(r0, opacity*r1);
+    int g = max(g0, opacity*g1);
+    int b = max(b0, opacity*b1);
+
+    *pix = (r << 16) | (g << 8) | b;
+}
+
+static void line(float x0, float y0, float x1, float y1, int color)
+{
+    // Xiaolin Wu's antialased algorithm
+    int steep = fabsf(y1-y0) > fabsf(x1-x0);
+    if(steep)
+    {
+        float tmp;
+        tmp = x0;
+        x0 = y0;
+        y0 = tmp;
+        tmp = x1;
+        x1 = y1;
+        y1 = tmp;
+    }
+
+    if(x0 > x1)
+    {
+        float tmp;
+        tmp = x0;
+        x0 = x1;
+        x1 = tmp;
+        tmp = y0;
+        y0 = y1;
+        y1 = tmp;
+    }
+
+    float dx = x1-x0, dy = y1-y0, gradient = dy/dx;
+
+    // Handle first endpoint
+    int xend = (int)(x0 + 0.5f);
+    int yend = y0 + gradient * (xend - x0);
+    float xgap = rfpart(x0 +0.5f);
+    int xpxl1 = xend;
+    int ypxl1 = (int)(yend);
+
+    if(steep)
+    {
+        plot(ypxl1,   xpxl1, rfpart(yend) * xgap, color);
+        plot(ypxl1+1, xpxl1, fpart(yend) * xgap, color);
+    }
+    else
+    {
+        plot(ypxl1, xpxl1, rfpart(yend) * xgap, color);
+        plot(ypxl1, xpxl1+1, fpart(yend) * xgap, color);
+    }
+
+    float intery = yend + gradient;
+    xend = (int)(x1 + 0.5f);
+    yend = y1 + gradient * (xend - x1);
+    xgap = fpart(x1 + 0.5);
+
+    int xpxl2 = xend;
+    int ypxl2 = (int)(yend);
+
+    if(steep)
+    {
+        plot(ypxl2, xpxl2, rfpart(yend) *  xgap, color);
+        plot(ypxl2+1, xpxl2, fpart(yend) * xgap, color);
+    }
+    else
+    {
+        plot(ypxl2, xpxl2, rfpart(yend) * xgap, color);
+        plot(ypxl2, xpxl2+1, fpart(yend) * xgap, color);
+    }
+
+    // main loop
+    for(int x = xpxl1 +1; x < xpxl2; ++x, intery += gradient)
+    {
+        if(steep)
+        {
+            plot((int)(intery), x,  rfpart(intery), color);
+            plot((int)(intery)+1, x, fpart(intery), color);
+        }
+        else
+        {
+            plot(x, (int)(intery),  rfpart(intery), color);
+            plot(x, (int)(intery)+1, fpart(intery), color);
+        }
+    }
+}
+
+// Bloom Postprocess add some bloom to the 2D map image.
+static void BloomPostprocess(void)
+{
+    const int blur_width = W/120;
+    const int blur_height = H/90;
+
+    float blir_kernel[blur_height*211][blur_width*2+1];
+    for(int y =-blur_height; y <= blur_height; ++y)
+    {
+        
+    }
+}
+
 // viline: Draw a vertical line on screen, with a different color pixel in top and bottom
 static void vline(int x, int y1, int y2, int top, int middle, int bottom)
 {
