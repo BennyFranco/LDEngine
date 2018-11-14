@@ -913,7 +913,230 @@ static void BuildLightmaps(void)
     fprintf(stderr, "Note: This would probably go faster if you enabled OpenMP in your compiler options. It's -fopenmp in GCC and Clang. \n");
 #endif
 
+        // Create unformly distributed random unit vectors
+        for(unsigned n = 0; n < nrandomvectors; ++n)
+        {
+            double u = (rand() % 1000000) / 1e6;
+            double v = (rand() % 1000000) / 1e6;
+            double theta = 2*3.141592653 * u;
+            double phi = acos(2*v-1);
+            tvec[n].x = cos(theta) * sin(phi);
+            tvec[n].y = sin(theta) * sin(phi);
+            tvec[n].z = cos(phi);
+        }
+
+        //  A lightsource is represented by a spherical cloud of smaller lightsources around the actual lightsource.
+        // The achieves smooth edges for the shadows.
+        #define drand(m) ((rand()%1000-500)*5e-2*m)
+        for(unsigned qa=0; qa < narealightcomponents; ++qa)
+        {
+            double len;
+            do{
+                avec[qa] = (struct vec3d){ drand(100.0), drand(100.0), drand(100.0) };
+                len = sqrt(avec[qa].x * avec[qa].x + avec[qa].y * avec[qa].y + avec[qa].z * avec[qa].z);
+            } while(len < 1e-3);
+
+            avec[qa].x *= area_light_radius / len;
+            avec[qa].y *= area_light_radius / len;
+            avec[qa].z *= area_light_radius / len;
+        }
         
+        #undef drand
+
+        fprintf(stderr, "Note: You can interrupt this program at any time you want. If you wish to resume\n"
+                        "      the lightmap calculation at a later date, use the --rebuild commandline option.\n"
+                        "      If you have already finished round 1 (diffuse light), and don't wish to do that\n"
+                        "      again, change the '#define firstround' value to your liking. Value 1 means\n"
+                        "      it starts from beginning, and any value from 2-100 (actual value is not important)\n"
+                        "      means to progressively improve the radiosity (cumulative). The current value is %d.\n",
+            firstround);
+
+        double total_differences = 0;
+        for(unsigned sectorno = 0; sectorno < NumSectors; ++sectorno)
+        {
+            struct sector* const sect = &sectors[sectorno];
+            const struct vec2d* const vert = sect->vertex;
+
+            double sector_differences = 0;
+
+            if(1) // do ceiling and floor
+            {
+                struct vec2d bounding_min = { 1e9f, 1e9f };
+                struct vec2d bounding_max = { -1e9f, -1e9f };
+
+                GetSectorBoundingBox(sectorno, &bounding_min, &bounding_max);
+                struct vec3d floornormal    = (struct vec3d){0, 1, 0}; // floor
+                struct vec3d floortangent   = (struct vec3d){1, 0, 0};
+                struct vec3d floorbitangent = vxs3(floornormal.x, floornormal.y, floornormal.z, floortangent.x, floortangent.y, floortangent.z);
+                struct vec3d ceilnormal     = (struct vec3d){0, -1, 0}; // ceiling
+                struct vec3d ceiltangent    = (struct vec3d){1, 0, 0};
+                struct vec3d ceilbitangent  = vxs3(ceilnormal.x, ceilnormal.y, ceilnormal.z, ceiltangent.x, ceiltangent.y, ceiltangent.z);
+
+                fprintf(stderr, "Bounding box for sector %d/%d: %g,%g - %g,%g\n", sectorno+1, NumSectors, bounding_min.x, 
+                        bounding_min.y, bounding_max.x, bounding_max.y);
+
+                // Round 1: Check lightsources
+                if(round == 1)
+                {
+                    struct Scaler txtx_int = Scaler_Init(0,0,1023, bounding_min.x*32768, bounding_max.x*32768);
+                    for(unsigned x = 0; x < 1024; ++x)
+                    {
+                        fprintf(stderr, "- Sector %d ceil&floor, %u/%u diffuse light...\r", sectorno+1, x, 1024);
+                        float txtx = Scaler_Next(&txtx_int) / 32768.f;
+
+                        // For better cache locality, fist, do floors and then ceils
+                        #pragma omp parallel
+                        OMP_SCALER_LOOP_BEGIN(0, y, 1024, bounding_min.y, txty, bounding_max.y);
+                            DiffuseLightCalculation(floornormal, floortangent, floorbitangent, sect->floortexture, ((unsigned)(txtx*256)) % 1024,
+                            ((unsigned)(txty*256)) % 1024, x, y, (struct vec3d){txtx, sect->floor, txty}, sectorno);
+                        OMP_SCALER_LOOP_END();
+                        #pragma omp parallel
+                        OMP_SCALER_LOOP_BEGIN(0, y, 1024, bounding_min.y, txty, bounding_max.y);
+                            DiffuseLightCalculation(ceilnormal, ceiltangent, ceilbitangent, sect->ceiltexture, ((unsigned)(txtx*256)) % 1024,
+                            ((unsigned)(txty*256)) % 1024, x, y, (struct vec3d){txtx, sect->ceil, txty}, sectorno);
+                        OMP_SCALER_LOOP_END();
+                    }
+
+                    fprintf(stderr, "\n");
+                    End_Diffuse(sect->floortexture);
+                    End_Diffuse(sect->ceiltexture);
+                }
+                else
+                {
+                    // Round 2+: Radiosity
+                    Begin_Radiosity(sect->floortexture);
+                    Begin_Radiosity(sect->ceiltexture);
+
+                    // Calculate radiosity in decreased resolution
+                    struct Scaler txtx_int = Scaler_Init(0,0,1023, bounding_min.x*32768, bounding_max.x*32768);
+                    for(unsigned x = 0; x < 1024; ++x)
+                    {
+                        fprintf(stderr, "- Sector %d ceil&floor, %u/%u radiosity...\r", sectorno+1, x, 1024);
+                        float txtx = Scaler_Next(&txtx_int) / 32768.f;
+
+                        // For better cache locality, fist, do floors and then ceils
+                        #pragma omp parallel
+                        OMP_SCALER_LOOP_BEGIN(0, y, 1024, bounding_min.y, txty, bounding_max.y);
+                            RadiosityCalculation(floornormal, floortangent, floorbitangent, sect->floortexture, ((unsigned)(txtx*256)) % 1024,
+                            ((unsigned)(txty*256)) % 1024, x, y, (struct vec3d){txtx, sect->floor, txty}, sectorno);
+                        OMP_SCALER_LOOP_END();
+                        #pragma omp parallel
+                        OMP_SCALER_LOOP_BEGIN(0, y, 1024, bounding_min.y, txty, bounding_max.y);
+                            RadiosityCalculation(ceilnormal, ceiltangent, ceilbitangent, sect->ceiltexture, ((unsigned)(txtx*256)) % 1024,
+                            ((unsigned)(txty*256)) % 1024, x, y, (struct vec3d){txtx, sect->ceil, txty}, sectorno);
+                        OMP_SCALER_LOOP_END();
+                    }
+
+                    char Buf[128];
+                    sprintf(Buf, "Sector %u floors", sectorno + 1);
+                    sector_differences += End_Radiosity(sect->floortexture, Buf);
+                    sprintf(Buf, "Sector %u ceils", sectorno + 1);
+                    sector_differences += End_Radiosity(sect->ceiltexture, Buf);
+                }
+            }
+
+            if(1)
+            {
+                for(unsigned s=0; s < sect->nPoints; ++s)
+                {
+                    float xd = vert[s+1].x - vert[s].x;
+                    float zd = vert[s+1].y - vert[s].y;
+                    float len = vlen(xd, zd, 0);
+
+                    struct vec3d normal     = { -zd/len, 0, xd/len};
+                    struct vec3d tangent    = {xd/len, 0, zd/len};
+                    struct vec3d bitangent  = {0, 1, 0};
+
+                    float hole_low  = 9e9;
+                    float hole_high = -9e9;
+
+                    if(sect->neighbors[s] >= 0)
+                    {
+                        hole_low  = max(sect->floor, sectors[sect->neighbors[s]].floor);
+                        hole_high = min(sect->ceil, sectors[sect->neighbors[s]].ceil);
+                    }
+
+                    if(round == 1)
+                    {
+                        // Round 1: Check lightsources
+                        struct Scaler txtx_int = Scaler_Init(0,0,1023, vert[s].x*32768, vert[s+1].x*32768);
+                        struct Scaler txtz_int = Scaler_Init(0,0,1023, vert[s].y*32768, vert[s+1].y*32768);
+
+                        for(unsigned x=0; x < 1024; ++x)
+                        {
+                            float txtx = Scaler_Next(&txtx_int) / 32768.f;
+                            float txtz = Scaler_Next(&txtz_int) / 32768.f;
+
+                            fprintf(stderr, "- Sector %u Wall %u/%u %u/%u diffuse light...\r", sectorno+1, s+1, sect->nPoints, x, 1024);
+                            #pragma omp parallel
+                            OMP_SCALER_LOOP_BEGIN(0,y,1024, sect->ceil, txty, sect->floor);
+                                struct TextureSet* texture = &sect->uppertextures[s];
+
+                                if(sect->neighbors[s] >= 0 && txty < hole_high)
+                                {
+                                    if(txty > hole_low)
+                                        continue;
+                                    texture = &sect->lowertextures[s];
+                                }
+
+                                struct vec3d point_in_wall = { txtx, txty, txtz };
+                                DiffuseLightCalculation(normal, tangent, bitangent, texture, x, y, x, y, point_in_wall, sectorno);
+                            OMP_SCALER_LOOP_END();
+                        }
+
+                        End_Diffuse(&sect->uppertextures[s]);
+                        End_Diffuse(&sect->lowertextures[s]);
+                    }
+                    else
+                    {
+                        Begin_Radiosity(&sect->uppertextures[s]);
+                        Begin_Radiosity(&sect->lowertextures[s]);
+
+                        // Round 2+: Radiosity 
+                        struct Scaler txtx_int = Scaler_Init(0,0,1023, vert[s].x*32768, vert[s+1].x*32768);
+                        struct Scaler txtz_int = Scaler_Init(0,0,1023, vert[s].y*32768, vert[s+1].y*32768);
+                        for(unsigned x=0; x < 1024; ++x)
+                        {
+                            float txtx = Scaler_Next(&txtx_int) / 32768.f;
+                            float txtz = Scaler_Next(&txtz_int) / 32768.f;
+
+                            fprintf(stderr, "- Sector %u Wall %u/%u %u/%u radiosity...\r", sectorno+1, s+1, sect->nPoints, x, 1024);
+                            #pragma omp parallel
+                            OMP_SCALER_LOOP_BEGIN(0,y,1024, sect->ceil, txty, sect->floor);
+                                struct TextureSet* texture = &sect->uppertextures[s];
+
+                                if(sect->neighbors[s] >= 0 && txty < hole_high)
+                                {
+                                    if(txty > hole_low)
+                                        continue;
+                                    texture = &sect->lowertextures[s];
+                                }
+
+                                struct vec3d point_in_wall = { txtx, txty, txtz };
+                                RadiosityCalculation(normal, tangent, bitangent, texture, x, y, x, y, point_in_wall, sectorno);
+                            OMP_SCALER_LOOP_END();
+                        }
+
+                        char Buf[128];
+                        sprintf(Buf, "Sector %u wall %u upper texture", sectorno + 1, s+1);
+                        sector_differences += End_Radiosity(&sect->uppertextures[s], Buf);
+                        sprintf(Buf, "Sector %u wall %u lower texture", sectorno + 1, s+1);
+                        sector_differences += End_Radiosity(&sect->lowertextures[s], Buf);
+                    }
+
+                    fprintf(stderr, "\n");
+                }
+            }
+
+            fprintf(stderr, "Round %u differences in sector %u: %g\n", round, sectorno+1, sector_differences);
+            total_differences += sector_differences;
+        }
+
+        fprintf(stderr, "Round %u differences total: %g\n", round, total_differences);
+        if(total_differences < 1e-6)
+        {
+            break;
+        }
     }
 }
 #endif
