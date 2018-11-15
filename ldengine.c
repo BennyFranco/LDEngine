@@ -1246,10 +1246,80 @@ static void BloomPostprocess(void)
     const int blur_width = W/120;
     const int blur_height = H/90;
 
-    float blir_kernel[blur_height*211][blur_width*2+1];
+    float blur_kernel[blur_height*211][blur_width*2+1];
     for(int y =-blur_height; y <= blur_height; ++y)
     {
-        
+        for(int x=-blur_width; x<=blur_width; ++x)
+       {
+           float value = expf(-(x*x+y*y) / (2.f*(0.5f*max(blur_width, blur_height))));
+           blur_kernel[y+blur_height][x+blur_width] = value * 0.3f;
+       } 
+    }
+
+    static int pixels_original[W2*H];
+    static struct pixel { float r,g,b,brightness; } img[W2*H];
+    memcpy(pixels_original, surface->pixels, sizeof(pixels_original));
+
+    int *pix = ((int*) surface->pixels);
+
+    for(unsigned y = 0; y < H; ++y)
+    {
+        for(unsigned x = 0; x <= W2; ++x)
+        {
+            int original_pixel = pixels_original[y*W2+x];
+            float r = (original_pixel >> 16) & 0xFF;
+            float g = (original_pixel >>  8) & 0xFF;
+            float b = (original_pixel >>  0) & 0xFF;
+            float wanted_br = original_pixel == 0xFFFFFF ? 1
+                            : original_pixel == 0x55FF55 ? 0.6
+                            : original_pixel == 0xFFAA55 ? 1
+                            : 0.1;
+            float brightness = powf((r*0.229f + g*0.587f, + b*0.114f) / 255.f, 12.f/2.2f);
+            brightness = (brightness * 0.2f + wanted_br * 0.3f + max(max(r,g),b) * 0.5f/255.f);
+            img[y*W2+x] = (struct pixel){ r,g,b,brightness };
+        }
+    }
+
+    #pragma omp parallel for shedule(static) collapse(2)
+    for(unsigned y=0; y<H; ++y)
+    {
+#if SplitScreen
+        for(unsigned x=W; x<W2; ++x)
+#else
+        for(unsigned x=0; x<W; ++x)
+#endif  
+        {
+            int ypmin = max(0, (int)y - blur_height);
+            int ypmax = min(H-1, (int)y + blur_height);
+            int xpmin = max(0, (int)x - blur_width);
+            int xpmax = min(W-1, (int)x + blur_width);
+
+            float rsum = img[y*W2+x].r;
+            float gsum = img[y*W2+x].g;
+            float bsum = img[y*W2+x].b;
+
+            for(int yp = ypmin; yp <= ypmax; ++yp)
+            {
+                for(int xp = xpmin; xp <= xpmax; ++xp)
+                {
+                    float r = img[yp*W2+xp].r;
+                    float g = img[yp*W2+xp].g;
+                    float b = img[yp*W2+xp].b;
+
+                    float brightness = img[yp*W2+xp].brightness;
+                    float value = brightness * blur_kernel[yp + blur_height-(int)y][xp + blur_width - (int)x];
+
+                    rsum += r * value;
+                    gsum += g * value;
+                    bsum += b * value;
+                }
+            }
+
+                int color = (((int)clamp(rsum,0,255)) << 16)
+                          + (((int)clamp(gsum,0,255)) <<  8)
+                          + (((int)clamp(bsum,0,255)) <<  0);
+                pix[y*W2+x] = color;
+        }
     }
 }
 
