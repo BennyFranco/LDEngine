@@ -1274,7 +1274,7 @@ static void BloomPostprocess(void)
                             : original_pixel == 0x55FF55 ? 0.6
                             : original_pixel == 0xFFAA55 ? 1
                             : 0.1;
-            float brightness = powf((r*0.229f + g*0.587f, + b*0.114f) / 255.f, 12.f/2.2f);
+            float brightness = powf((r*0.299f + g*0.587f + b*0.114f) / 255.f, 12.f/2.2f);
             brightness = (brightness * 0.2f + wanted_br * 0.3f + max(max(r,g),b) * 0.5f/255.f);
             img[y*W2+x] = (struct pixel){ r,g,b,brightness };
         }
@@ -1319,6 +1319,92 @@ static void BloomPostprocess(void)
                           + (((int)clamp(gsum,0,255)) <<  8)
                           + (((int)clamp(bsum,0,255)) <<  0);
                 pix[y*W2+x] = color;
+        }
+    }
+}
+
+// Fillpolygon draws a filled polygon - used only in the 2D map rendering
+static void fillpolygon(const struct sector* sect, int color)
+{
+#if SplitScreen
+    float square = min(W/20.f/0.8f, H/29.f);
+    float X      = (W2-W)/20.f;
+    float Y      = square;
+    float X0     = W+X*1.f;
+    float Y0     = (H-28*square)/2;
+#else
+    float square = min(W/20.f/0.8f, H/29.f);
+    float X      = square * 0.8;
+    float Y      = square;
+    float X0     = (W-18*square*0.8)/2;
+    float Y0     = (H-28*square)/2;
+#endif
+
+    const struct vec2d* const vert = sect->vertex;
+
+    // Find the minimum and maximum Y coordinates
+    float miny = 9e9, maxy = -9e9;
+    for(unsigned a = 0; a < sect->nPoints; ++a)
+    {
+        miny = min(miny, 28-vert[a].x);
+        maxy = max(maxy, 28-vert[a].x);
+    }
+
+    miny = Y0 + miny * Y;
+    maxy = Y0 + maxy * Y;
+
+    // Scan each line within this range
+    for(int y = max(0, (int)(miny+0.5)); y <= min(H-1, (int)(maxy+0.5)); ++y)
+    {
+        // Find all intersection points on this scanline
+        float intersections[W2];
+        unsigned num_intersections = 0;
+        for(unsigned a = 0; a < sect->nPoints && num_intersections < W; ++a)
+        {
+            float x0 = X0 + vert[a].y*X;
+            float x1 = X0 + vert[a+1].y*X;
+            float y0 = Y0+(28-vert[a].x)*Y;
+            float y1 = Y0+(28-vert[a+1].x)*Y;
+
+            if(IntersectBox(x0,y0,x1,y1,0,y,W2-1,y))
+            {
+                struct vec2d point = Intersect(x0,y0,x1,y1,0,y,W2-1,y);
+                if(isnan(point.x) || isnan(point.y))
+                    continue;
+
+                // Insert it in intersections[] keeping it sorted.
+                // Sorting complexity: n log n
+                unsigned begin  = 0;
+                unsigned end    = num_intersections;
+                unsigned len    = end - begin;
+
+                while(len)
+                {
+                    unsigned middle = begin + len/2;
+                    if(intersections[middle] < point.x)
+                    {
+                        begin = middle++;
+                        len = len - len/2 -1;
+                    }
+                    else
+                    {
+                        len /=2;
+                    }
+                }
+
+                for(unsigned n = num_intersections++; n > begin; --n)
+                {
+                    intersections[n] = intersections[n-1];
+                }
+
+                intersections[begin] = point.x;
+            }
+        }
+
+        // Draw lines
+        for(unsigned a = 0; a+1 < num_intersections; a+=2)
+        {
+            line(clamp(intersections[a], 0, W2-1), y, clamp(intersections[a+1], 0, W2-1), y, color);
         }
     }
 }
