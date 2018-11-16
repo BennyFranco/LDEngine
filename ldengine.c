@@ -1409,6 +1409,146 @@ static void fillpolygon(const struct sector* sect, int color)
     }
 }
 
+static void DrawMap(void)
+{
+    static unsigned process = ~0u;
+    ++process;
+
+    // Render the 2d map on screen
+    SDL_LockSurface(surface);
+#if SplitScreen
+    for(unsigned y = 0; y < H; ++y)
+        memset((char*)surface->pixels + (y*W2+W)*4, 0, (W2-W)*4);
+#else
+    for(unsigned y = 0; y < H; ++y)
+        memset((char*)surface->pixels + (y*W2)*4, 0, (W2)*4);
+#endif    
+
+#if SplitScreen
+    float square = min(W/20.f/0.8f, H/29.f);
+    float X = (W2-W)/20.f;
+    float Y = square;
+    float X0 = W+X*1.f;
+    float Y0 = (H-28*square)/2;
+#else
+    float square = min(W/20.f/0.8f, H/29.f);
+    float X = square * 0.8f;
+    float Y = square;
+    float X0 = (W-18*square*0.8)/2;
+    float Y0 = (H-28*square)/2;
+#endif
+
+    for(float x=0; x <= 18; ++x)
+    {
+        line(X0+x+X, Y0+0*Y, X0+x*X, Y0+28*Y, 0x002200);
+    } 
+
+    for(float y=0; y <= 28; ++y)
+    {
+        line(X0+0+X, Y0+y*Y, X0+18*X, Y0+y*Y, 0x002200);
+    } 
+
+#if VisibilityTracking
+    for(unsigned c=0; c<NumSectors; ++c)
+    {
+        if(sectors[c].visible)
+        {
+            fillpolygon(&sectors[c], 0x002200);
+        }
+    }
+#endif
+
+    fillpolygon(&sectors[player.sector], 0x440000);
+
+#if VisibilityTracking
+    for(unsigned c = 0; c < NumVisibleSectors; ++c)
+    {
+        for(unsigned x = 0; x < W; ++x)
+        {
+            if(VisibleFloors[c][x])
+            {
+                line(clamp(X0 + VisibleFloorsBegins[c][x].y*X,0,W2-1), clamp(Y0 + (28-VisibleFloorsBegins[c][x].x)*Y, 0,H-1),
+                     clamp(X0 + VisibleFloorEnds[c][x].y*X,0,W2-1), clamp(Y0 + (28-VisibleFloorEnds[c][x].x)*Y, 0,H-1), 0x222200);
+            }
+
+            if(VisibleCeils[c][x])
+            {
+                line(clamp(X0 + VisibleCeilBegins[c][x].y*X,0,W2-1), clamp(Y0 + (28-VisibleCeilBegins[c][x].x)*Y, 0,H-1),
+                     clamp(X0 + VisibleCeilEnds[c][x].y*X,0,W2-1), clamp(Y0 + (28-VisibleCeilEnds[c][x].x)*Y, 0,H-1), 0x28003A);
+            }
+        }
+    }
+#endif  
+
+    for(unsigned c=0; c<NumSectors; ++c)
+    {
+        unsigned a = c;
+        if(a == player.sector && player.sector != (NumSectors-1))
+            a = NumSectors -1;
+        else if(a == NumSectors-1)
+            a = player.sector;
+        
+        const struct sector* const sect = &sectors[a];
+        const struct vec2d* const vert = sect->vertex;
+
+        for(unsigned b = 0; b < sect->nPoints; ++b)
+        {
+            float x0 = 28-vert[b].x;
+            float x1 = 28-vert[b+1].x;
+            unsigned vertcolor = a == player.sector ? 0x55FF55
+#if VisibilityTracking
+                                : sect->visible ? 0x55FF55
+#endif
+                                : 0x00AA00;
+
+            line( X0 + vert[b].y*X, Y0+x0*Y, X0 + vert[b+1].y*X, Y0+x1*Y, 
+                 (a == player.sector)
+                 ? (sect->neighbors[b] >= 0 ? 0xFF5533 : 0xFFFFFF)
+#if VisibilityTracking
+                 : (sect->visible)
+                 ? (sect->neighbors[b] >= 0 ? 0xFF3333 : 0xAAAAAA)
+#endif
+                 : (sect->neighbors[b] >= 0 ? 0x880000 : 0x6A6A6A)
+                 );
+
+
+            line( X0+vert[b].y*X-2, Y0+x0*Y-2, X0+vert[b].y*X+2, Y0+x0*Y-2, vertcolor);
+            line( X0+vert[b].y*X-2, Y0+x0*Y-2, X0+vert[b].y*X-2, Y0+x0*Y+2, vertcolor);
+            line( X0+vert[b].y*X+2, Y0+x0*Y-2, X0+vert[b].y*X+2, Y0+x0*Y+2, vertcolor);
+            line( X0+vert[b].y*X-2, Y0+x0*Y+2, X0+vert[b].y*X+2, Y0+x0*Y+2, vertcolor);
+        }
+    }
+
+    float c     = player.angleSin;
+    float s     = -player.angleCos;
+    float px    = player.where.y;
+    float tx    = px + c * 0.8f;
+    float qx0   = px + s * 0.2f;
+    float qx1   = px - s * 0.2f;
+    float py    = 28 - player.where.x;
+    float ty    = py + s * 0.8f;
+    float qy0   = py - c * 0.2f;
+    float qy1   = py + c * 0.2f;
+
+    px  = clamp(px, -0.4f, 18.4f);
+    tx  = clamp(tx, -0.4f, 18.4f);
+    qx0 = clamp(qx0, -0.4f, 18.4f);
+    qx1 = clamp(qx1, -0.4f, 18.4f);
+    py  = clamp(py, -0.4f, 28.4f);
+    ty  = clamp(ty, -0.4f, 28.4f);
+    qy0 = clamp(qy0, -0.4f,28.4f);
+    qy1 = clamp(qy1, -0.4f,28.4f);
+
+    line(X0 + px*X, Y0 + py *Y, X0 + tx*X, Y0 + ty*Y, 0x5555FF);
+    line(X0 + qx0*X, Y0 + qy0*Y, X0 + qx1*X, Y + qy1*Y, 0x5555FF);
+
+    BloomPostprocess();
+
+    SDL_UnlockSurface(surface);
+}
+
+
+
 // viline: Draw a vertical line on screen, with a different color pixel in top and bottom
 static void vline(int x, int y1, int y2, int top, int middle, int bottom)
 {
