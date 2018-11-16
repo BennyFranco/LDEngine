@@ -1547,7 +1547,13 @@ static void DrawMap(void)
     SDL_UnlockSurface(surface);
 }
 
+static int vert_compare(const struct vec2d* a, const struct vec2d* b)
+{
+    if(a->y != b->y) 
+        return (a->y - b->y) * 1e3;
 
+    return (a->x - b->x) * 1e3;
+}
 
 // viline: Draw a vertical line on screen, with a different color pixel in top and bottom
 static void vline(int x, int y1, int y2, int top, int middle, int bottom)
