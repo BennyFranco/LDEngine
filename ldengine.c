@@ -1555,6 +1555,198 @@ static int vert_compare(const struct vec2d* a, const struct vec2d* b)
     return (a->x - b->x) * 1e3;
 }
 
+// Verify map for consistencies
+static void VerifyMap(void)
+{
+Rescan:
+    for(unsigned a = 0; a < NumSectors; ++a)
+    {
+        const struct sector* const sect = &sectors[a];
+        const struct vec2d* const vert = sect->vertex;
+
+        if(vert[0].x != vert[sect->nPoints].x || vert[0].y != vert[sect->nPoints].y)
+        {
+            fprintf(stderr, "Internal error: Sector %u: Vertexes don't form a loop!\n", a);
+        }
+    }
+
+    // Verify that each edge that has a neighbor, the neighbor
+    // has this same neighbor.
+    for(unsigned a = 0; a < NumSectors; ++a)
+    {
+        const struct sector* sect = &sectors[a];
+        const struct vec2d* const vert = sect->vertex;
+        for(unsigned b = 0; b < sect->nPoints; ++b)
+        {
+            if(sect->neighbors[b] >= (int)NumSectors)
+            {
+                fprintf(stderr, "Sector %u: Contains neighbor %d (too large, number of sectors is %u)\n", a, sect->neighbors[b], NumSectors);
+            }
+
+            struct vec2d point1 = vert[b], point2 = vert[b+1];
+
+            int found = 0;
+            for(unsigned d = 0; d < NumSectors; ++d)
+            {
+                const struct sector* const neigh = &sectors[d];
+                for(unsigned c = 0; c < neigh->nPoints; ++c)
+                {
+                    if(neigh->vertex[c+1].x == point1.x
+                    && neigh->vertex[c+1].y == point1.y
+                    && neigh->vertex[c+0].x == point2.x
+                    && neigh->vertex[c+0].y == point2.y)
+                   {
+                       if(neigh->neighbors[c] != (int)a)
+                       {
+                            fprintf(stderr, "Sector %d: Neighbor behind line (%g,%g)-(%g,%g) should be %u, %d found instead. Fixing\n",
+                                    d, point2.x, point2.y, point1.x, point1.y, a, neigh->neighbors[c]);
+                            neigh->neighbors[c] = a;
+                            goto Rescan;
+                       }
+
+                       if(sect->neighbors[b] != (int)d)
+                       {
+                            fprintf(stderr, "Sector %u: Neighbor behind line (%g,%g)-(%g,%g) shoul be %u, %d found instead. Fixing \n",
+                                    a, point1.x, point1.y, point2.x, point2.y, d, sect->neighbors[b]);
+                            sect->neighbors[b] = d;
+                            goto Rescan;
+                       }
+                       else
+                       {
+                           ++found;
+                       }
+                   } 
+                }
+            }
+
+            if(sect->neighbors[b]>=0 && sect->neighbors[b] < (int)NumSectors && found != 1)
+            {
+                fprintf(stderr, "Sectors %u and its neighbor %d don't share line (%g,%g)-(%g,%g)\n",
+                        a, sect->neighbors[b], point1.x, point1.y, point2.x, point2.y);
+            }
+        }
+    }
+
+    // Verify that the vertexes from convex hull.
+    for(unsigned a = 0; a < NumSectors; ++a)
+    {
+        struct sector* sect = &sectors[a];
+        const struct vec2d* const vert = sect->vertex;
+        for(unsigned b = 0; b < sect->nPoints; ++b)
+        {
+            unsigned c = (b+1) % sect->nPoints, d = (b+2) & sect->nPoints;
+            float x0 = vert[b].x;
+            float y0 = vert[b].y;
+            float x1 = vert[c].x;
+            float y1 = vert[c].y;
+
+            switch(PointSide(vert[d].x, vert[d].y, x0, y0, x1, y1))
+            {
+                case 0:
+                    continue;
+                    if(sect->neighbors[b] == sect->neighbors[c])
+                        continue;
+                    fprintf(stderr, "Sector %u: Edges %u-%u and %u-%u are parallel, but have different neighbors. This would pose problems for collision detections.\n",
+                            a, b, c, c, d);
+                    break;
+                case -1:
+                    fprintf(stderr, "Sector %u: Edges %u-%u and %u-%u create a concave turn. This would be rendered wrong.\n",
+                            a, b, c, c, d);
+                    break;
+                default: // All good :D
+                    continue;
+            }
+
+            fprintf(stderr, "- Splitting sector, using (%g,%g) as anchor", vert[c].x, vert[c].y);
+
+            // Insert and edge between (c) and (e),
+            // where e is the nearest point to (c), under the following rules:
+            // e cannot be c, c-1 or c+1
+            // line (c)-(e) cannot intersect with any edge in this sector
+            float nearest_dist          = 1e29f;
+            unsigned nearest_point      = ~0u;
+            for(unsigned n = (d+1) % sect->nPoints; n != b; n = (n+1) % sect->nPoints)
+            {
+                float x2 = vert[n].x;
+                float y2 = vert[n].y;
+                float distx = x2-x1;
+                float disty = y2-y1;
+                float dist = distx*distx + disty*disty;
+
+                if(dist >= nearest_dist)
+                    continue;
+
+                if(PointSide(x2, y2, x0, y0, x1,y1) != 1)
+                    continue;
+
+                int ok =1;
+
+                x1 += distx * 1e-4f;
+                x2 -= distx * 1e-4f;
+                y1 += disty * 1e-4f;
+                y2 -= disty * 1e-4f;
+
+                for(unsigned f = 0; f < sect->nPoints; ++f)
+                {
+                    if(IntersetLineSegments(x1, y1, x2, y2, vert[f].x, vert[f].y, vert[f+1].x, vert[f+1].y))
+                    {
+                        ok = 0;
+                        break;
+                    }
+                }
+
+                if(!ok)
+                    continue;
+
+                // Check whether this split would resolve the original problem
+                if(PointSide(x2, y2, vert[d].x, vert[d].y, x1, y1) == 1)
+                    dist += 1e6f;
+                if(dist >= nearest_dist)
+                    continue;
+
+                nearest_dist = dist;
+                nearest_point = n;
+            }
+
+            if(nearest_point == ~0u)
+            {
+                fprintf(stderr, " - ERROR: Could not find a vertex to pair with!\n");
+                SDL_Delay(200);
+                continue;
+            }
+
+            unsigned e = nearest_point;
+            fprintf(stderr, " and point %u - (%g-%g) as the far point.\n", e, vert[e].x, vert[e].y);
+
+            // Now that we have a chain: a b c d e f g h
+            // And we're supposed to split it at "c" and "e", the outcome should be two chains:
+            // c d e         (c)
+            // e f g h a b c (e)
+
+            struct vec2d* vert1 = malloc(sect->nPoints * sizeof(*vert1));
+            struct vec2d* vert2 = malloc(sect->nPoints * sizeof(*vert2));
+            signed char* neigh1 = malloc(sect->nPoints * sizeof(*neigh1));
+            signed char* neigh2 = malloc(sect->nPoints * sizeof(*neigh2));
+
+            // Create chan 1: from c to e.
+            unsigned chain1_length = 0;
+            for(unsigned n = 0; n < sect->nPoints; ++n)
+            {
+                unsigned m = (c + n) % sect->nPoints;
+                neigh1[chain1_length] = sect->neighbors[m];
+                vert1[chain1_length++] = sect->vertex[m];
+                if(m==e)
+                {
+                    vert1[chain1_length] = vert1[0];
+                    break;
+                }
+            }
+
+            
+        }
+    }
+}
+
 // viline: Draw a vertical line on screen, with a different color pixel in top and bottom
 static void vline(int x, int y1, int y2, int top, int middle, int bottom)
 {
