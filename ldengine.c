@@ -23,7 +23,7 @@
 
 #define TextureMapping      1
 #define DepthShading        0
-#define LightMapping        0
+#define LightMapping        1
 #define VisibilityTracking  1
 #define SplitScreen         0
 
@@ -1300,7 +1300,7 @@ static void BloomPostprocess(void)
         }
     }
 
-    #pragma omp parallel for shedule(static) collapse(2)
+    #pragma omp parallel for schedule(static) collapse(2)
     for(unsigned y=0; y<H; ++y)
     {
 #if SplitScreen
@@ -1901,7 +1901,7 @@ static void DrawScreen()
         renderedSectors[n] = 0;
     }
 
-#ifdef VisibilityTracking
+#if VisibilityTracking
     for(unsigned n = 0; n < NumSectors; ++n)
     {
         sectors[n].visible = 0;
@@ -2198,7 +2198,7 @@ static void DrawScreen()
 #if TextureMapping
                     vline2(x, cya, cnya-1, (struct Scaler)Scaler_Init(ya,cya,yb,0,1023), txtx, &sect->uppertextures[s]);
 #else
-    #ifdef DepthShading
+    #if DepthShading
                     unsigned r1 = 0x010101 * (255 - z);
                     unsigned r2 = 0x040007 * (31 - z/8);
     #else
