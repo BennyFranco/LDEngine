@@ -393,7 +393,7 @@ InitializeTextures:;
 
             for(unsigned w=0; w<sectors[n].nPoints; ++w)
             {
-                PutTextureSet(WallNormal2, WallNormal2);
+                PutTextureSet(WallTexture2, WallNormal2);
             }
         }
         
