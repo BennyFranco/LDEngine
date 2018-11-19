@@ -108,7 +108,7 @@ static unsigned NumSectors = 0;
 #if VisibilityTracking
 #define MaxVisibleSectors   256
 
-struct vec2d VisibleFloorsBegins[MaxVisibleSectors][W];
+struct vec2d VisibleFloorBegins[MaxVisibleSectors][W];
 struct vec2d VisibleFloorEnds[MaxVisibleSectors][W];
 char VisibleFloors[MaxVisibleSectors][W];
 
@@ -258,7 +258,7 @@ static void UnloadData(void)
     NumSectors = 0;
 }
 
-static int IntersetLineSegments(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3)
+static int IntersectLineSegments(float x0, float y0, float x1, float y1, float x2, float y2, float x3, float y3)
 {
     return IntersectBox(x0,y0,x1,y1,x2,y2,x3,y3)
         && abs(PointSide(x2,y2,x0,y0,x1,y1) + PointSide(x3,y3,x0,y0,x1,y1)) != 2
@@ -604,7 +604,7 @@ rescan:;
         float vx2 = sect->vertex[s+1].x;
         float vy2 = sect->vertex[s+1].y;
 
-        if(!IntersetLineSegments(origin.x, origin.z, target.x, target.z, vx1, vy1, vx2, vy2))
+        if(!IntersectLineSegments(origin.x, origin.z, target.x, target.z, vx1, vy1, vx2, vy2))
             continue;
 
         // Determine the X and Z coordinates of the wall hit.
@@ -1487,7 +1487,7 @@ static void DrawMap(void)
         {
             if(VisibleFloors[c][x])
             {
-                line(clamp(X0 + VisibleFloorsBegins[c][x].y*X,0,W2-1), clamp(Y0 + (28-VisibleFloorsBegins[c][x].x)*Y, 0,H-1),
+                line(clamp(X0 + VisibleFloorBegins[c][x].y*X,0,W2-1), clamp(Y0 + (28-VisibleFloorBegins[c][x].x)*Y, 0,H-1),
                      clamp(X0 + VisibleFloorEnds[c][x].y*X,0,W2-1), clamp(Y0 + (28-VisibleFloorEnds[c][x].x)*Y, 0,H-1), 0x222200);
             }
 
@@ -1708,7 +1708,7 @@ Rescan:
 
                 for(unsigned f = 0; f < sect->nPoints; ++f)
                 {
-                    if(IntersetLineSegments(x1, y1, x2, y2, vert[f].x, vert[f].y, vert[f+1].x, vert[f+1].y))
+                    if(IntersectLineSegments(x1, y1, x2, y2, vert[f].x, vert[f].y, vert[f+1].x, vert[f+1].y))
                     {
                         ok = 0;
                         break;
@@ -2170,7 +2170,7 @@ static void DrawScreen()
                         float FloorXbegin, FloorZbegin, FloorXend, FloorZend;
                         CeilingFloorScreenCoordinatesToMapCoordinates(yfloor, x, cyb+1, FloorXbegin, FloorZbegin);
                         CeilingFloorScreenCoordinatesToMapCoordinates(yfloor, x, ybottom[x], FloorXend, FloorZend);
-                        VisibleFloorsBegins[n][x] = (struct vec2d){ FloorXbegin, FloorZbegin };
+                        VisibleFloorBegins[n][x] = (struct vec2d){ FloorXbegin, FloorZbegin };
                         VisibleFloorEnds[n][x] = (struct vec2d) { FloorXend, FloorZend };
                         VisibleFloors[n][x] = 1;
                     }
