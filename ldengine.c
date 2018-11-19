@@ -23,7 +23,7 @@
 
 #define TextureMapping      1
 #define DepthShading        0
-#define LightMapping        1
+#define LightMapping        0
 #define VisibilityTracking  1
 #define SplitScreen         0
 
@@ -60,7 +60,7 @@
 static SDL_Surface *surface = NULL;
 
 #if TextureMapping
-typedef int Texture[1014][1024];
+typedef int Texture[1024][1024];
 
 struct TextureSet
 {
@@ -294,6 +294,24 @@ static int Scaler_Next(struct Scaler* i)
 #include <sys/stat.h>
 #include <errno.h>
 
+/*static void LT(char *filename, Texture* name)
+{
+    //Texture* name = NULL; 
+                do { 
+                    FILE* fp = fopen(filename, "rb"); 
+                    if(!fp) perror(filename); else { 
+                        name = malloc (sizeof(Texture));
+                        fseek(fp, 0x11, SEEK_SET); 
+                        for(unsigned y=0; y<1024; ++y)
+                            for(unsigned x=0; x<1024; ++x)
+                            {
+                                int r = fgetc(fp), g = fgetc(fp), b = fgetc(fp); 
+                                (*name)[x][y] = r * 65536 + g*256 + b; 
+                            }
+                            fclose(fp); } 
+                    } while(0);    
+}*/
+
 static int LoadTexture(void)
 {
     int initialized = 0;
@@ -317,7 +335,9 @@ InitializeTextures:;
                                 (*name)[x][y] = r * 65536 + g*256 + b; \
                             }\
                             fclose(fp); } \
-                    } while(0)    
+                    } while(0)  
+
+        //#define LoadTexture(filename, name) Texture* name = NULL; LT(filename, name)
 
         #define UnloadTexture(name) free (name)   
 
