@@ -315,7 +315,7 @@ static int Scaler_Next(struct Scaler* i)
 static int LoadTexture(void)
 {
     int initialized = 0;
-    int fd = open("ldengine_textures.bin", O_RDWR | O_CREAT, 0664);
+    int fd = open("ldengine_textures.bin", O_RDWR | O_CREAT, 0644);
 
     if(lseek(fd, 0, SEEK_END) == 0)
     {
@@ -444,7 +444,7 @@ InitializeTextures:;
 
 #if LightMapping
 #define vlen(x,y,z) sqrtf((x)*(x) + (y) * (y) + (z) * (z))
-#define vlen2(x0,y0,z0,x1,y1,z1) vlen((x1-x0), (y1-y0), (z1-z0))
+#define vlen2(x0,y0,z0,x1,y1,z1) vlen((x1)-(x0), (y1)-(y0), (z1)-(z0))
 #define vdot3(x0,y0,z0,x1,y1,z1) ((x0)*(x1) + (y0)*(y1) + (z0)*(z1))
 #define vxs3(x0,y0,z0,x1,y1,z1) (struct vec3d){ vxs(y0,z0,y1,z1), vxs(z0,x0,z1,x1), vxs(x0,y0,x1,y1) }
 
@@ -543,8 +543,8 @@ static void PutColor(int* target, struct vec3d color)
 static void AddColor(int* target, struct vec3d color)
 {
     int r = ((*target >> 16) &0xFF) + color.x;
-    int g = ((*target >> 16) &0xFF) + color.y;
-    int b = ((*target >> 16) &0xFF) + color.z;
+    int g = ((*target >>  8) &0xFF) + color.y;
+    int b = ((*target >>  0) &0xFF) + color.z;
 
     *target = ClampWithDesaturation(r,g,b);
 }
@@ -573,8 +573,8 @@ static void GetSectorBoundingBox(int sectorno, struct vec2d* bounding_min, struc
     {
         bounding_min->x = min(bounding_min->x, sect->vertex[s].x);
         bounding_min->y = min(bounding_min->y, sect->vertex[s].y);
-        bounding_max->x = max(bounding_min->x, sect->vertex[s].x);
-        bounding_max->y = max(bounding_min->y, sect->vertex[s].y);
+        bounding_max->x = max(bounding_max->x, sect->vertex[s].x);
+        bounding_max->y = max(bounding_max->y, sect->vertex[s].y);
 
     }
 }
@@ -665,7 +665,7 @@ rescan:;
         float nz  = vx1-vx2;
         float len = sqrtf(nx*nx + nz*nz);
 
-        result->normal = (struct vec3d){ nx/len, 0, nx/len };
+        result->normal = (struct vec3d){ nx/len, 0, nz/len };
 
         nx  = vx2 - vx1;
         nz  = vy2 - vy1;
@@ -715,8 +715,8 @@ rescan:;
             struct vec2d bounding_min = { 1e9f, 1e9f };
             struct vec2d bounding_max = { -1e9f, -1e9f };
             GetSectorBoundingBox(origin_sectorno, &bounding_min, &bounding_max);
-            lu = ((unsigned)((result->where.x - bounding_min.x) * 1024 / (bounding_max.x - bounding_min.x))) % 1024u;
-            lv = ((unsigned)((result->where.y - bounding_min.y) * 1024 / (bounding_max.y - bounding_min.y))) % 1024u;
+            lu = ((unsigned)((result->where.x - bounding_min.x) * 1024 / (bounding_max.x - bounding_min.x))) % 1024;
+            lv = ((unsigned)((result->where.y - bounding_min.y) * 1024 / (bounding_max.y - bounding_min.y))) % 1024;
 
             goto perturb_normal;
     }
@@ -767,8 +767,8 @@ static void DiffuseLightCalculation(struct vec3d normal, struct vec3d tangent, s
         struct vec3d source = 
         { 
             point_in_wall.x + normal.x * 1e-5f,
-            point_in_wall.x + normal.x * 1e-5f,
-            point_in_wall.x + normal.x * 1e-5f
+            point_in_wall.y + normal.y * 1e-5f,
+            point_in_wall.z + normal.z * 1e-5f
         };
 
         for(unsigned qa = 0; qa < narealightcomponents; ++qa)
@@ -908,7 +908,7 @@ static void End_Diffuse(struct TextureSet* set)
         struct Scaler e##int = Scaler_Init(a, my_start, (c)-1, (d) * 32768, (f) * 32768); \
         for(int b = my_start; b < my_end; ++b) \
         { \
-            float e = Scaler_Next(&e##int) / 32768.f);\
+            float e = Scaler_Next(&e##int) / 32768.f;
 
 #else
 #define OMP_SCALER_LOOP_BEGIN(a,b,c,d,e,f) do { \
@@ -926,7 +926,7 @@ static void End_Diffuse(struct TextureSet* set)
 // Lightmap calculation involes some raytracing.
 static void BuildLightmaps(void)
 {
-    for(unsigned round = firstround; maxrounds; ++round)
+    for(unsigned round = firstround; round<=maxrounds; ++round)
     {
         fprintf(stderr, "Lighting calculation, round %u...\n", round);
 #ifndef _OPENMP
@@ -1152,7 +1152,7 @@ static void BuildLightmaps(void)
             total_differences += sector_differences;
         }
 
-        fprintf(stderr, "Round %u differences total: %g\n", round, total_differences);
+        fprintf(stderr, "Round %u differences total: %g.\n", round, total_differences);
         if(total_differences < 1e-6)
         {
             break;
@@ -1221,8 +1221,8 @@ static void line(float x0, float y0, float x1, float y1, int color)
     }
     else
     {
-        plot(ypxl1, xpxl1, rfpart(yend) * xgap, color);
-        plot(ypxl1, xpxl1+1, fpart(yend) * xgap, color);
+        plot(xpxl1, ypxl1, rfpart(yend) * xgap, color);
+        plot(xpxl1, ypxl1+1, fpart(yend) * xgap, color);
     }
 
     float intery = yend + gradient;
@@ -1240,8 +1240,8 @@ static void line(float x0, float y0, float x1, float y1, int color)
     }
     else
     {
-        plot(ypxl2, xpxl2, rfpart(yend) * xgap, color);
-        plot(ypxl2, xpxl2+1, fpart(yend) * xgap, color);
+        plot(xpxl2, ypxl2, rfpart(yend) * xgap, color);
+        plot(xpxl2, ypxl2+1, fpart(yend) * xgap, color);
     }
 
     // main loop
@@ -1266,7 +1266,7 @@ static void BloomPostprocess(void)
     const int blur_width = W/120;
     const int blur_height = H/90;
 
-    float blur_kernel[blur_height*211][blur_width*2+1];
+    float blur_kernel[blur_height*2+1][blur_width*2+1];
     for(int y =-blur_height; y <= blur_height; ++y)
     {
         for(int x=-blur_width; x<=blur_width; ++x)
@@ -1284,7 +1284,7 @@ static void BloomPostprocess(void)
 
     for(unsigned y = 0; y < H; ++y)
     {
-        for(unsigned x = 0; x <= W2; ++x)
+        for(unsigned x = 0; x < W2; ++x)
         {
             int original_pixel = pixels_original[y*W2+x];
             float r = (original_pixel >> 16) & 0xFF;
@@ -1347,13 +1347,13 @@ static void BloomPostprocess(void)
 static void fillpolygon(const struct sector* sect, int color)
 {
 #if SplitScreen
-    float square = min(W/20.f/0.8f, H/29.f);
+    float square = min(W/20.f/0.8, H/29.f);
     float X      = (W2-W)/20.f;
     float Y      = square;
     float X0     = W+X*1.f;
     float Y0     = (H-28*square)/2;
 #else
-    float square = min(W/20.f/0.8f, H/29.f);
+    float square = min(W/20.f/0.8, H/29.f);
     float X      = square * 0.8;
     float Y      = square;
     float X0     = (W-18*square*0.8)/2;
@@ -1441,18 +1441,18 @@ static void DrawMap(void)
         memset((char*)surface->pixels + (y*W2+W)*4, 0, (W2-W)*4);
 #else
     for(unsigned y = 0; y < H; ++y)
-        memset((char*)surface->pixels + (y*W2)*4, 0, (W2)*4);
+        memset((char*)surface->pixels + (y*W2)*4, 0, (W)*4);
 #endif    
 
 #if SplitScreen
-    float square = min(W/20.f/0.8f, H/29.f);
+    float square = min(W/20.f/0.8, H/29.f);
     float X = (W2-W)/20.f;
     float Y = square;
     float X0 = W+X*1.f;
     float Y0 = (H-28*square)/2;
 #else
-    float square = min(W/20.f/0.8f, H/29.f);
-    float X = square * 0.8f;
+    float square = min(W/20.f/0.8, H/29.f);
+    float X = square * 0.8;
     float Y = square;
     float X0 = (W-18*square*0.8)/2;
     float Y0 = (H-28*square)/2;
@@ -1460,12 +1460,12 @@ static void DrawMap(void)
 
     for(float x=0; x <= 18; ++x)
     {
-        line(X0+x+X, Y0+0*Y, X0+x*X, Y0+28*Y, 0x002200);
+        line(X0+x*X, Y0+0*Y, X0+x*X, Y0+28*Y, 0x002200);
     } 
 
     for(float y=0; y <= 28; ++y)
     {
-        line(X0+0+X, Y0+y*Y, X0+18*X, Y0+y*Y, 0x002200);
+        line(X0+0*X, Y0+y*Y, X0+18*X, Y0+y*Y, 0x002200);
     } 
 
 #if VisibilityTracking
@@ -1473,7 +1473,7 @@ static void DrawMap(void)
     {
         if(sectors[c].visible)
         {
-            fillpolygon(&sectors[c], 0x002200);
+            fillpolygon(&sectors[c], 0x220000);
         }
     }
 #endif
@@ -1560,7 +1560,7 @@ static void DrawMap(void)
     qy1 = clamp(qy1, -0.4f,28.4f);
 
     line(X0 + px*X, Y0 + py *Y, X0 + tx*X, Y0 + ty*Y, 0x5555FF);
-    line(X0 + qx0*X, Y0 + qy0*Y, X0 + qx1*X, Y + qy1*Y, 0x5555FF);
+    line(X0 + qx0*X, Y0 + qy0*Y, X0 + qx1*X, Y0 + qy1*Y, 0x5555FF);
 
     BloomPostprocess();
 
