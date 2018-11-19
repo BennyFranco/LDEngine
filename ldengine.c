@@ -2235,9 +2235,17 @@ static void DrawScreen()
 
 static SDL_Window *window = NULL;
 
-int main()
+int main(int argc, char** argv)
 {
     LoadData();
+    VerifyMap();
+#if TextureMapping
+    int textures_initialized = LoadTexture();
+    #if LightMapping
+        if(textures_initialized || (argc > 1 && strcmp(argv[1], "--rebuild") == 0))
+            BuildLightmaps();
+    #endif
+#endif
 
   if (SDL_Init(SDL_INIT_VIDEO) != 0) {
         fprintf(stderr, "SDL failed to initialise: %s\n", SDL_GetError());
@@ -2247,7 +2255,7 @@ int main()
     window = SDL_CreateWindow("SDL Doom", /* Title of the SDL window */
  			    SDL_WINDOWPOS_UNDEFINED, /* Position x of the window */
  			    SDL_WINDOWPOS_UNDEFINED, /* Position y of the window */
- 			    W, /* Width of the window in pixels */
+ 			    W2, /* Width of the window in pixels */
  			    H, /* Height of the window in pixels */
  			    SDL_WINDOW_OPENGL); /* Additional flag(s) */
 
@@ -2260,16 +2268,37 @@ int main()
 
     SDL_ShowCursor(SDL_DISABLE);
 
+    signal(SIGINT, SIG_DFL);
+
+    FILE* fp = fopen("actions.log", "rb");
+
     int wasd[4] = { 0, 0, 0, 0 };
     int ground = 0;
     int falling = 1;
     int moving = 0;
     int ducking = 0;
+    int map = 0;
 
     float yaw = 0;
 
     for (;;)
     {
+
+        DrawScreen();
+#if SplitScreen
+        DrawMap();
+#else
+        if(map) 
+            DrawMap();
+#endif
+
+        /*static unsigned skip = 0;
+        if(++skip >= 1)
+        {
+            skip = 0;
+            SDL_Flip(surface);
+        }*/
+
         // Vertical collision detection
         float eyeheight = ducking ? DuckHeight : EyeHeight;
 
@@ -2370,6 +2399,7 @@ int main()
                         ducking = ev.type == SDL_KEYDOWN;
                         falling = 1;
                     break;
+                    case SDLK_TAB: map = ev.type == SDL_KEYDOWN; break;
                     default: break;
                 }
                 break;
@@ -2378,12 +2408,14 @@ int main()
             }
 
             // Mouse aiming
-            int x,y;
-            SDL_GetRelativeMouseState(&x, &y);
-            player.angle += x * 0.03f;
-            yaw = clamp(yaw - y * 0.05f, -5, 5);
-            player.yaw = yaw - player.velocity.z * 0.5f;
-            MovePlayer(0,0);
+            {
+                int x,y;
+                SDL_GetRelativeMouseState(&x, &y);
+                player.angle += x * 0.03f;
+                yaw = clamp(yaw - y * 0.05f, -5, 5);
+                player.yaw = yaw - player.velocity.z * 0.5f;
+                MovePlayer(0,0);
+            }
 
             float move_vec[2] = { 0.f, 0.f };
             if(wasd[0])
@@ -2421,9 +2453,9 @@ int main()
 				
         }
 
-        SDL_LockSurface(surface);
-        DrawScreen();
-        SDL_UnlockSurface(surface);
+        //SDL_LockSurface(surface);
+        //DrawScreen();
+        //SDL_UnlockSurface(surface);
         SDL_UpdateWindowSurface(window);
 		SDL_Delay(10);
     }
