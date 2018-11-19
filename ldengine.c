@@ -1781,7 +1781,7 @@ Rescan:
     printf("%d sectors. \n", NumSectors);
 }
 
-#if !TextureMapping || 1
+#if !TextureMapping
 // viline: Draw a vertical line on screen, with a different color pixel in top and bottom
 static void vline(int x, int y1, int y2, int top, int middle, int bottom)
 {
@@ -1822,6 +1822,7 @@ static void MovePlayer(float dx, float dy)
             && PointSide(px+dx, py+dy, vert[s+0].x, vert[s+0].y, vert[s+1].x, vert[s+1].y) < 0)
         {
             player.sector = sect->neighbors[s];
+            printf("Player is now in sector %d\n", player.sector);
             break;
         }
     }
@@ -1832,22 +1833,43 @@ static void MovePlayer(float dx, float dy)
     player.angleCos = cosf(player.angle);
 }
 
+#if TextureMapping
+static void vline2(int x, int y1, int y2, struct Scaler ty, unsigned txtx, const struct TextureSet* t)
+{
+    int *pix = (int*)surface->pixels;
+    y1 = clamp(y1, 0, H-1);
+    y2 = clamp(y2, 0, H-1);
+    pix += y1 * W2 + x;
+
+    for(int y = y1; y <= y2; ++y)
+    {
+        unsigned txty = Scaler_Next(&ty);
+#if LightMapping
+        *pix = ApplyLight(t->texture[txtx % 1024][txty % 1024], t->lightmap[txtx % 1024][txty % 1024]);
+#else
+        *pix = t->texture[txtx % 1024][txty % 1024];
+#endif
+        pix += W2;
+    }
+}
+#endif
+
 static void DrawScreen()
 {
     struct item
     {
-        int sectorno;
-        int sx1;
-        int sx2;
+        short sectorno;
+        short sx1;
+        short sx2;
     };
 
     struct item queue[MaxQueue];
     struct item *head = queue;
     struct item *tail = queue;
 
-    int ytop[W] = {0};
-    int ybottom[W];
-    int renderedSectors[NumSectors];
+    short ytop[W] = {0};
+    short ybottom[W];
+    short renderedSectors[NumSectors];
 
     for(unsigned x=0; x<W; ++x)
     {
@@ -1859,6 +1881,17 @@ static void DrawScreen()
         renderedSectors[n] = 0;
     }
 
+#ifdef VisibilityTracking
+    for(unsigned n = 0; n < NumSectors; ++n)
+    {
+        sectors[n].visible = 0;
+    }
+
+    memset(VisibleFloors, 0, sizeof(VisibleFloors));
+    memset(VisibleCeils, 0, sizeof(VisibleCeils));
+    NumVisibleSectors = 0;
+#endif
+
     *head = (struct item) { player.sector, 0, W-1 };
 
     if(++head == queue+MaxQueue)
@@ -1866,7 +1899,10 @@ static void DrawScreen()
         head = queue;
     }
 
-    do{
+    SDL_LockSurface(surface);
+
+    while(head != tail)
+    {
         // pick a sector and slice from queue to draw
         const struct item now = *tail;
 
@@ -1878,7 +1914,17 @@ static void DrawScreen()
         if(renderedSectors[now.sectorno] & 0x21) continue; // Odd = still rendering, 0x20 = give up
         ++renderedSectors[now.sectorno];
 
+#if VisibilityTracking
+    sectors[now.sectorno].visible = 1;
+#endif
+
         const struct sector* const sect = &sectors[now.sectorno];
+
+#if LightMapping
+        struct vec2d bounding_min = { 1e9f, 1e9f };
+        struct vec2d bounding_max = { -1e9f, -1e9f };
+        GetSectorBoundingBox(now.sectorno, &bounding_min, &bounding_max);
+#endif
 
         // Render each wall of this sector that is facing towards player.
         for(unsigned s = 0; s < sect->nPoints; ++s)
@@ -1901,6 +1947,10 @@ static void DrawScreen()
             // Is the wall at least partially in fron of the player?
             if(tz1 <= 0 && tz2 <= 0) continue;
 
+#if TextureMapping
+            int u0 = 0, u1 = 1023;
+#endif            
+
             // If it's partially behaind the player, clip it against player's view frustrum
             if(tz1 <= 0 || tz2 <= 0)
             {
@@ -1912,6 +1962,11 @@ static void DrawScreen()
                 // Find an intersection between the wall and the approximate edges of player's view
                 struct vec2d i1 = Intersect(tx1, tz1, tx2, tz2, -nearside, nearz, -farside, farz);
                 struct vec2d i2 = Intersect(tx1, tz1, tx2, tz2, nearside, nearz, farside, farz);
+
+#if TextureMapping
+                struct vec2d org1 = { tx1, tz1 };
+                struct vec2d org2 = { tx2, tz2 };
+#endif                
 
                 if(tz1 < nearz)
                 {
@@ -1940,13 +1995,26 @@ static void DrawScreen()
                         tz2 = i2.y;
                     }
                 }
+
+#if TextureMapping
+                if(abs(tx2-tx1) > abs(tz2 - tz1))
+                {
+                    u0 = (tx1 - org1.x) * 1023 / (org2.x - org1.x);
+                    u1 = (tx2 - org1.x) * 1023 / (org2.x - org1.x);
+                }
+                else
+                {
+                    u0 = (tz1 - org1.y) * 1023 / (org2.y - org1.y);
+                    u1 = (tz2 - org1.y) * 1023 / (org2.y - org1.y);
+                }
+#endif
             }
 
             // Perspective transformation
-            float xscale1 = hfov / tz1;
-            float yscale1 = vfov / tz1;
-            float xscale2 = hfov / tz2;
-            float yscale2 = vfov / tz2;
+            float xscale1 = (W*hfov) / tz1;
+            float yscale1 = (H*vfov) / tz1;
+            float xscale2 = (W*hfov) / tz2;
+            float yscale2 = (H*vfov) / tz2;
 
             int x1 = W / 2 - (int)(tx1 * xscale1);
             int x2 = W / 2 - (int)(tx2 * xscale2);
@@ -1986,46 +2054,162 @@ static void DrawScreen()
             int beginx = max(x1, now.sx1);
             int endx = min(x2, now.sx2);
 
+#if DepthShading && !TextureMapping
+            struct Scaler z_int = Scaler_Init(x1, beginx, x2, tz1*8,tz2*8);
+#endif
+            struct Scaler ya_int    = Scaler_Init(x1, beginx, x2, y1a, y2a);
+            struct Scaler yb_int    = Scaler_Init(x1, beginx, x2, y1b, y2b);
+            struct Scaler nya_int   = Scaler_Init(x1, beginx, x2, ny1a, ny2a);
+            struct Scaler nyb_int   = Scaler_Init(x1, beginx, x2, ny1b, ny2b);
+;
             for(int x = beginx; x <= endx; ++x)
             {
+#if TextureMapping
+                int txtx = (u0*((x2-x)*tz2) + u1*((x-x1)*tz1)) / ((x2-x)*tz2 + (x-x1)*tz1);
+#endif                
+#if DepthShading && !TextureMapping
                 // Calculate the Z coordinate for this point (Only used for lighting)
-                int z = ((x - x1) * (tz2-tz1) / (x2-x1) + tz1) * 8;
-
+                int z = Scaler_Next(&z_int);//((x - x1) * (tz2-tz1) / (x2-x1) + tz1) * 8;
+#endif
                 // Acquire the Y coordinates for our ceiling and floor for this X coordinate. Clamp them.
-                int ya = (x-x1) * (y2a - y1a) / (x2-x1) + y1a;
-                int yb = (x-x1) * (y2b - y1b) / (x2-x1) + y1b;
+                int ya = Scaler_Next(&ya_int); //(x-x1) * (y2a - y1a) / (x2-x1) + y1a;
+                int yb = Scaler_Next(&yb_int); //(x-x1) * (y2b - y1b) / (x2-x1) + y1b;
                 int cya = clamp(ya, ytop[x], ybottom[x]); // top
                 int cyb = clamp(yb, ytop[x], ybottom[x]); // bottom
 
+                // Our perspective calculation produces these two:
+                //     screenX = W/2 + -mapX              * (W*hfov) / mapZ
+                //     screenY = H/2 + -(mapY + mapZ*yaw) * (H*vfov) / mapZ
+                // To translate these coordinates back into mapX, mapY and mapZ...
+                //
+                // Solving for Z, when we know Y (ceiling height):
+                //     screenY - H/2  = -(mapY + mapZ*yaw) * (H*vfov) / mapZ
+                //     (screenY - H/2) / (H*vfov) = -(mapY + mapZ*yaw) / mapZ
+                //     (H/2 - screenY) / (H*vfov) = (mapY + mapZ*yaw) / mapZ
+                //     mapZ = mapY / ((H/2 - screenY) / (H*vfov) - yaw)
+                //     mapZ = mapY*H*vfov / (H/2 - screenY - yaw*H*vfov)
+                // Solving for X, when we know Z
+                //     mapX = mapZ*(W/2 - screenX) / (W*hfov)
+                //
+                // This calculation is used for visibility tracking
+                //   (the visibility cones in the map)
+                // and for floor & ceiling texture mapping.
+                //
+
+                #define CeilingFloorScreenCoordinatesToMapCoordinates(mapY, screenX, screenY, X, Z) \
+                    do { Z = (mapY)*H*vfov / ((H/2 - (screenY)) - player.yaw * H * vfov); \
+                         X = (Z) * (W/2 - (screenX)) / (W*hfov); \
+                         RelativeMapCoordinatesToAbsoluteOnes(X,Z); } while(0)
+
+                #define RelativeMapCoordinatesToAbsoluteOnes(X,Z) \
+                    do { float rtx = (Z) * pcos + (X) * psin; \
+                         float rtz = (Z) * psin - (X) * pcos; \
+                         X = rtx + player.where.x; Z = rtz + player.where.y; \
+                       } while(0) 
+
+
+#if TextureMapping
+                for(int y = ytop[x]; y <= ybottom[x]; ++y)
+                {
+                    if(y >= cya && y <= cyb)
+                    {
+                        y = cyb;
+                        continue;
+                    }
+
+                    float hei = y < cya ? yceil : yfloor;
+                    float mapx, mapz;
+
+                    CeilingFloorScreenCoordinatesToMapCoordinates(hei, x, y, mapx, mapz);
+                    unsigned txtx = (mapx * 256);
+                    unsigned txtz = (mapz * 256);
+                    const struct TextureSet* txt = y < cya ? sect->ceiltexture : sect->floortexture;
+
+#if LightMapping
+                    unsigned lu = ((unsigned)((mapx - bounding_min.x) * 1024 / (bounding_max.x - bounding_min.x))) % 1024;
+                    unsigned lv = ((unsigned)((mapz - bounding_min.y) * 1024 / (bounding_max.y - bounding_min.y))) % 1024;
+                    int pel = ApplyLight(txt->texture[txtx % 1024][txtz % 1024], txt->lightmap[lu][lv]);
+#else
+                    int pel = txt->texture[txtz % 1024][txtx % 1024];
+#endif
+                    ((int*)surface->pixels)[y*W2+x] = pel;
+                }
+#else
                 // Render ceiling: everything above this sector's ceiling height
                 vline(x, ytop[x], cya-1, 0x111111, 0x222222, 0x111111);
 
                 // Render floor: everything below this sector's floor height
                 vline(x, cyb+1, ybottom[x], 0x0000FF, 0x0000AA, 0x0000FF);
+#endif
 
+#if VisibilityTracking
+                {
+                    unsigned n = NumVisibleSectors;
+                    if(ybottom[x] >= (cyb+1))
+                    {
+                        float FloorXbegin, FloorZbegin, FloorXend, FloorZend;
+                        CeilingFloorScreenCoordinatesToMapCoordinates(yfloor, x, cyb+1, FloorXbegin, FloorZbegin);
+                        CeilingFloorScreenCoordinatesToMapCoordinates(yfloor, x, ybottom[x], FloorXend, FloorZend);
+                        VisibleFloorsBegins[n][x] = (struct vec2d){ FloorXbegin, FloorZbegin };
+                        VisibleFloorEnds[n][x] = (struct vec2d) { FloorXend, FloorZend };
+                        VisibleFloors[n][x] = 1;
+                    }
+
+                    if((cya-1) >= ytop[x])
+                    {
+                        float CeilXbegin, CeilZbegin, CeilXend, CeilZend;
+                        CeilingFloorScreenCoordinatesToMapCoordinates(yceil, x, ytop[x], CeilXbegin, CeilZbegin);
+                        CeilingFloorScreenCoordinatesToMapCoordinates(yceil, x, cya-1, CeilXend, CeilZend);
+                        VisibleCeilBegins[n][x] = (struct vec2d){ CeilXbegin, CeilZbegin };
+                        VisibleCeilEnds[n][x] = (struct vec2d) { CeilXend, CeilZend };
+                        VisibleCeils[n][x] = 1;
+                    }
+                }
+#endif
                 // Is there another sector behind this edge?
                 if(neighbor >= 0)
                 {
-                    int nya = (x-x1) * (ny2a - ny1a) / (x2-x1) + ny1a;
-                    int nyb = (x-x1) * (ny2b - ny1b) / (x2-x1) + ny1b;
+                    int nya = Scaler_Next(&nya_int); //(x-x1) * (ny2a - ny1a) / (x2-x1) + ny1a;
+                    int nyb = Scaler_Next(&nyb_int); //(x-x1) * (ny2b - ny1b) / (x2-x1) + ny1b;
                     int cnya = clamp(nya, ytop[x], ybottom[x]); // top
                     int cnyb = clamp(nyb, ytop[x], ybottom[x]); // bottom
 
                     // If our ceiling is higher than ther ceiling, render upper wall
+#if TextureMapping
+                    vline2(x, cya, cnya-1, (struct Scaler)Scaler_Init(ya,cya,yb,0,1023), txtx, &sect->uppertextures[s]);
+#else
+    #ifdef DepthShading
                     unsigned r1 = 0x010101 * (255 - z);
                     unsigned r2 = 0x040007 * (31 - z/8);
+    #else
+                    unsigned r1 = 0xAAAAAA;
+                    unsigned r2 = 0x7C00D9;                   
+    #endif
                     vline(x, cya, cnya-1, 0, x==x1 || x == x2 ? 0 : r1, 0); //Between our and their ceiling
+#endif
                     ytop[x] = clamp(max(cya, cnya), ytop[x], H-1); // Shrink the remaining window below these ceiling;
 
                     // If our floor is lower than ther floor, render bottom wall
+#if TextureMapping
+                    vline2(x, cnyb+1, cyb,  (struct Scaler)Scaler_Init(ya,cnyb+1,yb,0,1023), txtx, &sect->lowertextures[s]);
+#else
                     vline(x, cnyb+1, cyb, 0, x == x1 || x == x2 ? 0 : r2, 0); // Between their and our floor
+#endif
                     ybottom[x] = clamp(min(cyb, cnyb), 0, ybottom[x]); // Shrink the remaining window above these floor
                 }
                 else
                 {
                     // NO NEIGHBOR!!!! Render wall from top to bottom
+#if TextureMapping
+                    vline2(x, cya, cyb, (struct Scaler)Scaler_Init(ya,cya,yb,0,1023), txtx, &sect->uppertextures[s]);
+#else
+    #if DepthShading
                     unsigned r = 0x010101 * (255-z);
+    #else
+                    unsigned r = 0xAAAAAA;
+    #endif
                     vline(x, cya, cyb, 0, x==x1 || x == x2 ? 0 : r, 0);
+#endif                    
                 }
             } // for ends
 
@@ -2041,7 +2225,12 @@ static void DrawScreen()
         }  // for ends
 
         ++renderedSectors[now.sectorno];
-    } while(head != tail); // render any other queued sectors
+#if VisibilityTracking
+        NumVisibleSectors += 1;
+#endif
+    } 
+
+    SDL_UnlockSurface(surface);
 }
 
 static SDL_Window *window = NULL;
