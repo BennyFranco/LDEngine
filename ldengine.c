@@ -90,8 +90,8 @@ static struct sector
     float floor;
     float ceil;
     struct vec2d *vertex;
-    signed char *neighbors;
     unsigned short nPoints;
+    signed char *neighbors;
 #if VisibilityTracking
     int visible;
 #endif    
@@ -1742,11 +1742,46 @@ Rescan:
                 }
             }
 
+            neigh1[chain1_length-1] = NumSectors;
+
+            // Create chanin 2: from e to c.
+            unsigned chain2_length = 0;
+            for(unsigned n = 0; n < sect->nPoints; ++n)
+            {
+                unsigned m = (e+n) % sect->nPoints;
+                neigh2[chain2_length] = sect->neighbors[m];
+                vert2[chain2_length++] = sect->vertex[m];
+                if(m == c)
+                {
+                    vert2[chain2_length] = vert2[0];
+                    break;
+                } 
+            }
+
+            neigh2[chain2_length-1] = a;
             
+            // Change sect into using chain1.
+            free(sect->vertex);
+            sect->vertex =  vert1;
+            free(sect->neighbors);
+            sect->neighbors = neigh1;
+            sect->nPoints = chain1_length;
+
+            // Create another sector that uses chain2.
+            sectors = realloc(sectors, ++NumSectors * sizeof(*sectors));
+            sect = &sectors[a];
+            sectors[NumSectors-1] = (struct sector) { sect->floor, sect->ceil, vert2, chain2_length, neigh2 };
+
+            // The other sector may now have neighbors that think their neighbor is still the old sector.
+            // Rescan to fix it.
+            goto Rescan;
         }
     }
+
+    printf("%d sectors. \n", NumSectors);
 }
 
+#if !TextureMapping || 1
 // viline: Draw a vertical line on screen, with a different color pixel in top and bottom
 static void vline(int x, int y1, int y2, int top, int middle, int bottom)
 {
@@ -1756,19 +1791,20 @@ static void vline(int x, int y1, int y2, int top, int middle, int bottom)
 
     if(y2 == y1)
     {
-        pix[y1*W+x] = middle;
+        pix[y1*W2+x] = middle;
     }
     else if(y2 > y1)
     {
-        pix[y1*W+x] = top;
+        pix[y1*W2+x] = top;
         for(int y = y1+1; y < y2; ++y)
         {
-            pix[y*W+x] = middle;
+            pix[y*W2+x] = middle;
         }
 
-        pix[y2*W+x] = bottom;
+        pix[y2*W2+x] = bottom;
     }
 }
+#endif
 
 // MovePlayer: Moves the player by (dx,dy) in the map, and also updates ther anglesin, anglecos and sector
 // properties.
